@@ -1,0 +1,27 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}Expense Tracker{% endblock %}</title>
+    <link rel="stylesheet" href="{% static 'tracker/app.css' %}">
+    {% block extra_head %}{% endblock %}
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="header-content">
+        <a class="brand" href="{% url 'tracker:transaction_list' %}">Mis Transacciones</a>
+        <nav>
+          <a href="{% url 'admin:index' %}">Admin</a>
+        </nav>
+      </div>
+    </header>
+    <main class="app-main">
+      {% block content %}{% endblock %}
+    </main>
+    <footer class="app-footer">
+      <p>Expense Tracker &middot; {% now 'Y' %}</p>
+    </footer>
+  </body>
+</html>
