@@ -19,6 +19,21 @@
       }
 
       select.dataset.previousValue = select.value || "";
+      const newOption = select.querySelector("option[value='__new__']");
+      if (newOption && !select.dataset.newOptionLabel) {
+        select.dataset.newOptionLabel = newOption.textContent || "";
+      }
+
+      const updateNewOptionLabel = (label) => {
+        if (!newOption) {
+          return;
+        }
+        if (label) {
+          newOption.textContent = label;
+        } else {
+          newOption.textContent = select.dataset.newOptionLabel || "Crear nueva cuenta…";
+        }
+      };
 
       const openPopout = () => {
         modal.classList.add("is-open");
@@ -30,9 +45,11 @@
         modal.classList.remove("is-open");
         if (reset) {
           select.value = select.dataset.previousValue || "";
+          updateNewOptionLabel("");
         }
         if (select.value !== "__new__") {
           newInput.value = "";
+          updateNewOptionLabel("");
         }
         if (!anyModalOpen()) {
           document.body.classList.remove("expense-modal-open");
@@ -70,10 +87,13 @@
       });
 
       confirm?.addEventListener("click", () => {
-        if (!newInput.value.trim()) {
+        const trimmed = newInput.value.trim();
+        if (!trimmed) {
           newInput.focus();
           return;
         }
+        select.value = "__new__";
+        updateNewOptionLabel(`Nueva: ${trimmed}`);
         closePopout(false);
       });
     });

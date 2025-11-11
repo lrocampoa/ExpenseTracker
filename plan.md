@@ -66,6 +66,26 @@
 - Transaction detail UI lets users edit values inline; categorizer runs after parse/reparse. ✅
 - **Next:** dedicated “categorize correction” workflow that captures manual adjustments + suggests new rules automatically.
 
+### Phase 3.5: Categorization Workflow Enhancements
+- Build a Categorization & Rules view where each user can inspect default rules (seeded at signup) and add/edit their own entries (priority, keyword, card filters, confidence toggle).
+- Preload a baseline rule set per user derived from common merchants/categories so new accounts start with useful automation immediately.
+- On manual transaction edits (especially category+merchant changes) automatically propose a new rule: `merchant_name` + chosen category, including card last4 when present. Let users confirm/adjust the suggested rule before saving.
+- When a transaction is saved, persist both the corrected category and the auto-generated rule (if confirmed) so future transactions auto-classify; log the linkage for auditability and allow one-click disable.
+- Surface pending suggestions in the rules view so users can accept/decline rules that were inferred but not auto-applied (e.g., low-confidence cases).
+
+**Next up for Phase 3 / 3.5**
+1. Inline rule toggles + bulk priority editing so users can quickly disable or reorder rules without leaving the list.
+2. Show suggestion provenance (source transaction, fields changed, confidence) inside the dashboard manual-review card to triage faster.
+3. Add rule-level analytics (match count, last-hit timestamp) so noisy rules can be tuned or retired automatically.
+4. Rule priority should behave like a draggable list so users can grab a row and move it up/down to redefine execution order visually.
+
+### Phase 3.6: Budgets, Categorías y Subcategorías
+- Introduce first-class “Categorías” (budgets) and “Subcategorías” (granular tags) so spending can be tracked vs limit per parent category.
+- Seed default Spanish categorias/subcategorias for every user (e.g., “Utilidades” → “Internet”, “Agua”, “Luz”, “Cuota condominal”, “Alquiler”; “Transporte” → “Gasolina”, “Uber/Taxi”, etc.) together with representative rules.
+- Extend transaction forms, filters, and dashboards to capture/display both category + subcategory, and surface budget progress (spent vs limit, alert >90%).
+- Add UI to manage categorias/subcategorias (create, edit, set monthly budget) so users can tailor budgets without touching the admin.
+- Feed categorización rules + suggestions with subcategory context so future automation can tag the right sub-bucket automatically.
+
 ### Phase 4: API & UI
 - Responsive transaction dashboard (filters, quick months, inline edit, Gmail email preview). ✅
 - Import wizard (connect Gmail, choose years, run pipeline) with Google OAuth start/callback. ✅

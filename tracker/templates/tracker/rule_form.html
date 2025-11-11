@@ -1,0 +1,15 @@
+{% extends "tracker/base.html" %}
+{% block title %}Editar regla{% endblock %}
+{% block content %}
+<section class="section-card">
+  <div class="section-header">
+    <h1>Editar regla</h1>
+    <a href="{% url 'tracker:rules' %}" class="btn btn-secondary">&larr; Volver</a>
+  </div>
+  <form method="post" class="rule-form">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <button type="submit" class="btn btn-primary">Guardar cambios</button>
+  </form>
+</section>
+{% endblock %}

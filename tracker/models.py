@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.db import models
+from django.db.models import Q
 
 
 class TimeStampedModel(models.Model):
@@ -21,16 +22,48 @@ class Category(TimeStampedModel):
         null=True,
         blank=True,
     )
-    code = models.SlugField(max_length=64, unique=True)
+    code = models.SlugField(max_length=64)
     name = models.CharField(max_length=128)
     description = models.TextField(blank=True)
+    budget_limit = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
     is_active = models.BooleanField(default=True)
 
     class Meta(TimeStampedModel.Meta):
         verbose_name_plural = "Categories"
+        constraints = [
+            models.UniqueConstraint(
+                fields=("user", "code"),
+                name="unique_category_code_per_user",
+            )
+        ]
 
     def __str__(self) -> str:
         return self.name
+
+
+class Subcategory(TimeStampedModel):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="subcategories",
+        null=True,
+        blank=True,
+    )
+    category = models.ForeignKey(
+        Category,
+        on_delete=models.CASCADE,
+        related_name="subcategories",
+    )
+    code = models.SlugField(max_length=64)
+    name = models.CharField(max_length=128)
+    budget_limit = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+
+    class Meta(TimeStampedModel.Meta):
+        unique_together = ("category", "code")
+        ordering = ("name",)
+
+    def __str__(self) -> str:
+        return f"{self.category.name} · {self.name}"
 
 
 class Card(TimeStampedModel):
@@ -59,6 +92,23 @@ class Card(TimeStampedModel):
     def __str__(self) -> str:
         label = self.label or "Card"
         return f"{label} ••••{self.last4}"
+
+
+class ExpenseAccount(TimeStampedModel):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="expense_accounts",
+    )
+    name = models.CharField(max_length=128)
+    is_default = models.BooleanField(default=False)
+
+    class Meta(TimeStampedModel.Meta):
+        unique_together = ("user", "name")
+        ordering = ("name",)
+
+    def __str__(self) -> str:
+        return self.name
 
 
 class EmailMessage(TimeStampedModel):
@@ -115,6 +165,13 @@ class Transaction(TimeStampedModel):
     )
     category = models.ForeignKey(
         Category,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="transactions",
+    )
+    subcategory = models.ForeignKey(
+        "Subcategory",
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
@@ -270,8 +327,20 @@ class CategoryRule(TimeStampedModel):
         REGEX = ("regex", "Regex")
         ALWAYS = ("always", "Always Match")
 
-    name = models.CharField(max_length=128)
+    class Origin(models.TextChoices):
+        MANUAL = ("manual", "Manual")
+        PROMOTED = ("promoted", "Manual Promotion")
+        SUGGESTED = ("suggested", "Accepted Suggestion")
+        SEEDED = ("seeded", "Default Seed")
+
     category = models.ForeignKey(Category, on_delete=models.CASCADE, related_name="rules")
+    subcategory = models.ForeignKey(
+        Subcategory,
+        on_delete=models.CASCADE,
+        related_name="rules",
+        null=True,
+        blank=True,
+    )
     match_value = models.CharField(max_length=255, blank=True)
     match_field = models.CharField(
         max_length=32, choices=MatchField.choices, default=MatchField.MERCHANT
@@ -284,15 +353,125 @@ class CategoryRule(TimeStampedModel):
         blank=True,
         help_text="Optional: restrict rule to a specific card last4.",
     )
-    min_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
-    max_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
     priority = models.PositiveIntegerField(default=100)
-    confidence = models.FloatField(default=0.8)
     is_active = models.BooleanField(default=True)
     notes = models.TextField(blank=True)
+    origin = models.CharField(max_length=32, choices=Origin.choices, default=Origin.MANUAL)
 
     class Meta(TimeStampedModel.Meta):
-        ordering = ("priority", "-confidence", "name")
+        ordering = ("priority", "match_value")
 
     def __str__(self) -> str:
-        return f"{self.name} -> {self.category.name}"
+        label = self.match_value or "Regla"
+        return f"{label} -> {self.category.name}"
+
+
+class TransactionCorrection(TimeStampedModel):
+    transaction = models.ForeignKey(
+        Transaction,
+        on_delete=models.CASCADE,
+        related_name="corrections",
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="transaction_corrections",
+    )
+    previous_category = models.ForeignKey(
+        Category,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    new_category = models.ForeignKey(
+        Category,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    previous_subcategory = models.ForeignKey(
+        "Subcategory",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    new_subcategory = models.ForeignKey(
+        "Subcategory",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    previous_merchant_name = models.CharField(max_length=255, blank=True)
+    new_merchant_name = models.CharField(max_length=255, blank=True)
+    previous_description = models.TextField(blank=True)
+    new_description = models.TextField(blank=True)
+    previous_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    new_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    previous_currency_code = models.CharField(max_length=12, blank=True)
+    new_currency_code = models.CharField(max_length=12, blank=True)
+    previous_transaction_date = models.DateTimeField(null=True, blank=True)
+    new_transaction_date = models.DateTimeField(null=True, blank=True)
+    changed_fields = models.JSONField(default=list, blank=True)
+
+    class Meta(TimeStampedModel.Meta):
+        ordering = ("-created_at",)
+
+    def __str__(self) -> str:
+        return f"Correction for {self.transaction_id} by {self.user_id or 'system'}"
+
+
+class RuleSuggestion(TimeStampedModel):
+    class Status(models.TextChoices):
+        PENDING = ("pending", "Pending")
+        ACCEPTED = ("accepted", "Accepted")
+        REJECTED = ("rejected", "Rejected")
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="rule_suggestions",
+        null=True,
+        blank=True,
+    )
+    transaction = models.ForeignKey(
+        Transaction,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="rule_suggestions",
+    )
+    correction = models.ForeignKey(
+        TransactionCorrection,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="rule_suggestions",
+    )
+    merchant_name = models.CharField(max_length=255)
+    category = models.ForeignKey(
+        Category,
+        on_delete=models.CASCADE,
+        related_name="rule_suggestions",
+    )
+    card_last4 = models.CharField(max_length=4, blank=True)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
+    reason = models.CharField(max_length=255, blank=True)
+
+    class Meta(TimeStampedModel.Meta):
+        ordering = ("-created_at",)
+        constraints = [
+            models.UniqueConstraint(
+                fields=("user", "merchant_name", "category", "card_last4", "status"),
+                condition=Q(status="pending"),
+                name="unique_pending_suggestion",
+            )
+        ]
+
+    def __str__(self):
+        return f"Suggestion {self.merchant_name} -> {self.category} ({self.status})"

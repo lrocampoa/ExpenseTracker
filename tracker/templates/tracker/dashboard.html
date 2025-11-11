@@ -3,66 +3,85 @@
 {% block title %}Tablero{% endblock %}
 
 {% block content %}
-<div class="dashboard-header">
-  <div>
-    <p class="eyebrow">Visión general · {{ period.label }}</p>
-    <h1>Tablero financiero</h1>
-    <p class="muted">
-      {{ period.start|date:"M d, Y" }} &mdash; {{ period.end|date:"M d, Y" }}
-    </p>
-  </div>
-  <div class="range-chips">
-    {% for option in period.available_ranges %}
-      <a class="chip {% if option.active %}chip-active{% endif %}" href="{{ option.url }}">{{ option.label }}</a>
-    {% endfor %}
-  </div>
-</div>
+<div class="dashboard-page">
+  <section class="dashboard-hero">
+    <div class="dashboard-header">
+      <div>
+        <p class="eyebrow">Visión general · {{ period.label }}</p>
+        <h1>Tablero financiero</h1>
+        <p class="muted">
+          {{ period.start|date:"M d, Y" }} &mdash; {{ period.end|date:"M d, Y" }}
+        </p>
+      </div>
+      <div class="dashboard-controls">
+        <div class="range-chips">
+          {% for option in period.available_ranges %}
+            <a class="chip {% if option.active %}chip-active{% endif %}" href="{{ option.url }}">{{ option.label }}</a>
+          {% endfor %}
+        </div>
+        <form class="expense-filter-form" method="get">
+          <label for="dashboard-expense-filter">Cuenta</label>
+          <select id="dashboard-expense-filter" name="expense_account" onchange="this.form.submit()">
+            <option value="">{% if expense_filter.is_active %}Todas{% else %}Todas las cuentas{% endif %}</option>
+            {% for option in expense_filter.options %}
+              <option value="{{ option.value }}" {% if option.value == expense_filter.value %}selected{% endif %}>{{ option.label }}</option>
+            {% endfor %}
+          </select>
+          {% for key, value in request.GET.items %}
+            {% if key != "expense_account" %}
+              <input type="hidden" name="{{ key }}" value="{{ value }}">
+            {% endif %}
+          {% endfor %}
+        </form>
+      </div>
+    </div>
 
-{% if alerts %}
-  <div class="alert-badges">
-    {% for alert in alerts %}
-      <span class="alert-badge alert-{{ alert.severity }}">{{ alert.label }}: <strong>{{ alert.value }}</strong></span>
-    {% endfor %}
-  </div>
-{% endif %}
-
-<section class="kpi-grid">
-  <div class="kpi-card">
-    <p class="kpi-label">Gasto del periodo</p>
-    <p class="kpi-value">
-      {{ hero.total_spend|format_number }} {{ hero.currency_totals.0.currency_code|default:"CRC" }}
-    </p>
-    {% if hero.pct_change %}
-      <span class="kpi-delta {% if hero.pct_change > 0 %}delta-up{% else %}delta-down{% endif %}">
-        {% if hero.pct_change > 0 %}+{% endif %}{{ hero.pct_change|format_number:1 }}% vs periodo anterior
-      </span>
-    {% else %}
-      <span class="kpi-muted">Sin histórico previo</span>
+    {% if alerts %}
+      <div class="alert-badges">
+        {% for alert in alerts %}
+          <span class="alert-badge alert-{{ alert.severity }}">{{ alert.label }}: <strong>{{ alert.value }}</strong></span>
+        {% endfor %}
+      </div>
     {% endif %}
-    <ul class="currency-breakdown">
-      {% for row in hero.currency_totals %}
-        <li>{{ row.currency_code }} · {{ row.total|format_number }}</li>
-      {% empty %}
-        <li>No hay montos registrados</li>
-      {% endfor %}
-    </ul>
-  </div>
-  <div class="kpi-card">
-    <p class="kpi-label">Promedio diario</p>
-    <p class="kpi-value">{{ hero.avg_daily|format_number }} {{ hero.currency_totals.0.currency_code|default:"CRC" }}</p>
-    <span class="kpi-muted">Basado en {{ period.days }} días</span>
-  </div>
-  <div class="kpi-card">
-    <p class="kpi-label">Transacciones</p>
-    <p class="kpi-value">{{ hero.transaction_count|format_number:0 }}</p>
-    <span class="kpi-muted">Ticket promedio: {{ hero.avg_ticket|format_number }} {{ hero.currency_totals.0.currency_code|default:"CRC" }}</span>
-  </div>
-  <div class="kpi-card">
-    <p class="kpi-label">Tarjetas activas</p>
-    <p class="kpi-value">{{ hero.active_cards|format_number:0 }}</p>
-    <span class="kpi-muted">Tarjetas con gasto en el periodo</span>
-  </div>
-</section>
+
+    <div class="kpi-grid">
+      <div class="kpi-card">
+        <p class="kpi-label">Gasto del periodo</p>
+        <p class="kpi-value">
+          {{ hero.total_spend|format_number }} {{ hero.currency_totals.0.currency_code|default:"CRC" }}
+        </p>
+        {% if hero.pct_change %}
+          <span class="kpi-delta {% if hero.pct_change > 0 %}delta-up{% else %}delta-down{% endif %}">
+            {% if hero.pct_change > 0 %}+{% endif %}{{ hero.pct_change|format_number:1 }}% vs periodo anterior
+          </span>
+        {% else %}
+          <span class="kpi-muted">Sin histórico previo</span>
+        {% endif %}
+        <ul class="currency-breakdown">
+          {% for row in hero.currency_totals %}
+            <li>{{ row.currency_code }} · {{ row.total|format_number }}</li>
+          {% empty %}
+            <li>No hay montos registrados</li>
+          {% endfor %}
+        </ul>
+      </div>
+      <div class="kpi-card">
+        <p class="kpi-label">Promedio diario</p>
+        <p class="kpi-value">{{ hero.avg_daily|format_number }} {{ hero.currency_totals.0.currency_code|default:"CRC" }}</p>
+        <span class="kpi-muted">Basado en {{ period.days }} días</span>
+      </div>
+      <div class="kpi-card">
+        <p class="kpi-label">Transacciones</p>
+        <p class="kpi-value">{{ hero.transaction_count|format_number:0 }}</p>
+        <span class="kpi-muted">Ticket promedio: {{ hero.avg_ticket|format_number }} {{ hero.currency_totals.0.currency_code|default:"CRC" }}</span>
+      </div>
+      <div class="kpi-card">
+        <p class="kpi-label">Tarjetas activas</p>
+        <p class="kpi-value">{{ hero.active_cards|format_number:0 }}</p>
+        <span class="kpi-muted">Tarjetas con gasto en el periodo</span>
+      </div>
+    </div>
+  </section>
 
 <section class="section-card">
   <div class="section-header">
@@ -150,44 +169,220 @@
   {% endif %}
 </section>
 
+<section class="section-card">
+  <div class="section-header">
+    <div>
+      <h2>Cuentas contables</h2>
+      <p class="muted">Gasto por cuenta asociada a tarjetas en el periodo</p>
+    </div>
+  </div>
+  {% if expense_accounts.has_data %}
+    <div class="expense-account-grid">
+      <div class="expense-bars">
+        {% for row in expense_accounts.rows %}
+          <div class="expense-bar-row">
+            <div class="expense-bar-head">
+              <div>
+                <strong>{{ row.label }}</strong>
+                <p class="muted">
+                  {{ row.card_count|format_number:0 }} tarjetas · {{ row.count|format_number:0 }} transacciones
+                </p>
+              </div>
+              <div class="expense-bar-value">
+                <span>{{ row.total|format_number }}</span>
+                {% if row.delta_pct %}
+                  <small class="{% if row.delta_pct > 0 %}delta-up{% else %}delta-down{% endif %}">
+                    {% if row.delta_pct > 0 %}+{% endif %}{{ row.delta_pct|format_number:1 }}% vs periodo anterior
+                  </small>
+                {% else %}
+                  <small class="muted">Sin histórico</small>
+                {% endif %}
+              </div>
+            </div>
+            <div class="expense-bar-track">
+              <div class="expense-bar-fill" style="width: {{ row.bar_pct }}%">
+                {% for segment in row.segments %}
+                  <span
+                    class="expense-bar-segment"
+                    style="width: {{ segment.width_pct }}%; background: {{ segment.color }};"
+                  ></span>
+                {% endfor %}
+              </div>
+            </div>
+            <div class="expense-bar-meta">
+              <span class="muted">{{ row.share_pct|format_number:1 }}% del total</span>
+              <div class="expense-tags">
+                {% for segment in row.segments %}
+                  <span class="expense-tag">
+                    {{ segment.label|default:"Sin etiqueta" }}
+                    {% if segment.last4 %}
+                      · ••••{{ segment.last4 }}
+                    {% endif %}
+                    <small>{{ segment.amount|format_number }}</small>
+                  </span>
+                {% empty %}
+                  <span class="muted">Sin detalle de tarjetas.</span>
+                {% endfor %}
+              </div>
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+      <div class="expense-pie-panel">
+        <div class="expense-pie" style="{{ expense_accounts.pie_style }}"></div>
+        <div class="expense-pie-meta">
+          <p class="muted">Total periodo</p>
+          <p class="insight-value">{{ expense_accounts.grand_total|format_number }}</p>
+          <p class="muted">
+            {{ expense_accounts.visible_accounts }}/{{ expense_accounts.total_accounts }} cuentas con movimiento
+          </p>
+        </div>
+        <ul class="expense-legend">
+          {% for row in expense_accounts.rows %}
+            <li>
+              <span class="legend-swatch" style="background: {{ row.color }};"></span>
+              <div>
+                <strong>{{ row.label }}</strong>
+                <small>{{ row.share_pct|format_number:1 }}%</small>
+              </div>
+              <span>{{ row.total|format_number }}</span>
+            </li>
+          {% endfor %}
+          {% if expense_accounts.others_total %}
+            <li>
+              <span class="legend-swatch" style="background: #d4d4d8;"></span>
+              <div>
+                <strong>Otros</strong>
+                <small>resto</small>
+              </div>
+              <span>{{ expense_accounts.others_total|format_number }}</span>
+            </li>
+          {% endif %}
+        </ul>
+      </div>
+    </div>
+  {% else %}
+    <p class="muted">Aún no hay transacciones con cuentas asignadas a tarjetas.</p>
+  {% endif %}
+</section>
+
 <section class="section-grid">
   <div class="section-card">
     <div class="section-header">
       <h2>Insight por categoría</h2>
       <p class="muted">Participación y variación vs periodo previo</p>
     </div>
-    <table class="data-table">
-      <thead>
-        <tr>
-          <th>Categoría</th>
-          <th>Gasto</th>
-          <th>Participación</th>
-          <th>Δ periodo anterior</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for item in category_insights %}
-          <tr>
-            <td>{{ item.label }}</td>
-            <td>{{ item.total|format_number }}</td>
-            <td>{{ item.share|format_number:1 }}%</td>
-            <td>
-              {% if item.delta_pct %}
-                <span class="{% if item.delta_pct > 0 %}delta-up{% else %}delta-down{% endif %}">
-                  {% if item.delta_pct > 0 %}+{% endif %}{{ item.delta_pct|format_number:1 }}%
-                </span>
-              {% else %}
-                <span class="kpi-muted">n/a</span>
-              {% endif %}
-            </td>
+    {% if expense_filter.is_active %}
+      <div class="info-callout">
+        <strong>{{ expense_filter.label }}</strong>
+        <span>Presupuesto global, gasto filtrado por esta cuenta; puede haber montos adicionales en otras cuentas.</span>
+      </div>
+    {% endif %}
+    <div class="category-section-body">
+      <div class="category-table">
+        <div class="table-wrapper">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Categoría</th>
+                <th>Gasto</th>
+                <th>Presupuesto</th>
+            <th>Disponible</th>
+            <th>Uso presupuesto</th>
+            <th>Participación</th>
+            <th>Δ periodo anterior</th>
           </tr>
-        {% empty %}
-          <tr>
-            <td colspan="4" class="muted">Aún no hay categorías para este rango.</td>
-          </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {% for item in category_insights %}
+            <tr>
+              <td>{{ item.label }}</td>
+              <td>{{ item.total|format_number }}</td>
+              <td>
+                {% if item.budget_limit %}
+                  {{ item.budget_limit|format_number }}
+                {% else %}
+                  <span class="muted">n/a</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if item.budget_remaining is not None %}
+                  <div class="budget-progress">
+                    <div class="budget-progress-track">
+                      <span
+                        class="budget-progress-fill {% if item.is_budget_over %}over{% endif %}"
+                        style="width: {{ item.budget_fill_pct }}%"
+                      ></span>
+                    </div>
+                    <div class="budget-progress-meta">
+                      <strong class="{% if item.is_budget_over %}delta-up{% endif %}">
+                        {{ item.budget_remaining_abs|format_number }}
+                      </strong>
+                      <small>
+                        {% if item.is_budget_over %}
+                          sobrepasado
+                        {% else %}
+                          por gastar
+                        {% endif %}
+                      </small>
+                    </div>
+                  </div>
+                {% else %}
+                  <span class="muted">n/a</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if item.budget_limit %}
+                    <span class="{% if item.budget_used_pct and item.budget_used_pct > 100 %}delta-up{% endif %}">
+                    {{ item.budget_used_pct|default_if_none:0|format_number:1 }}%
+                  </span>
+                {% else %}
+                  <span class="muted">n/a</span>
+                {% endif %}
+              </td>
+              <td>{{ item.share|format_number:1 }}%</td>
+              <td>
+                {% if item.delta_pct %}
+                  <span class="{% if item.delta_pct > 0 %}delta-up{% else %}delta-down{% endif %}">
+                    {% if item.delta_pct > 0 %}+{% endif %}{{ item.delta_pct|format_number:1 }}%
+                  </span>
+                {% else %}
+                  <span class="kpi-muted">n/a</span>
+                {% endif %}
+              </td>
+            </tr>
+          {% empty %}
+            <tr>
+              <td colspan="7" class="muted">Aún no hay categorías para este rango.</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+        </div>
+      </div>
+      <aside class="category-budget-chart">
+        <div class="chart-card">
+          <h3>Uso de presupuesto</h3>
+          <p class="muted">Top categorías con límite asignado</p>
+          <ul class="budget-chart-list">
+            {% for row in category_budget_chart %}
+              <li>
+                <div class="budget-chart-head">
+                  <span>{{ row.label }}</span>
+                  <small>{{ row.spent|format_number }} / {{ row.budget|format_number }}</small>
+                </div>
+                <div class="budget-chart-track">
+                  <span class="budget-chart-fill {% if row.is_over %}over{% endif %}" style="width: {{ row.fill_pct }}%"></span>
+                </div>
+                <span class="budget-chart-meta {% if row.is_over %}delta-up{% endif %}">{{ row.used_pct|format_number:1 }}% consumido</span>
+              </li>
+            {% empty %}
+              <li class="muted">Agrega presupuestos a tus categorías para ver este gráfico.</li>
+            {% endfor %}
+          </ul>
+        </div>
+      </aside>
+    </div>
   </div>
   <div class="section-card">
     <div class="section-header">
@@ -240,30 +435,32 @@
       <h2>Salud de tarjetas</h2>
       <p class="muted">Uso por tarjeta y tarjetas inactivas</p>
     </div>
-    <table class="data-table">
-      <thead>
-        <tr>
-          <th>Tarjeta</th>
-          <th>Transacciones</th>
-          <th>Total</th>
-          <th>Ticket promedio</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for card in card_health.card_stats %}
+    <div class="table-wrapper">
+      <table class="data-table">
+        <thead>
           <tr>
-            <td>{{ card.card__label }} · ••••{{ card.card__last4 }}</td>
-            <td>{{ card.count|format_number:0 }}</td>
-            <td>{{ card.total|format_number }}</td>
-            <td>{{ card.avg|format_number }}</td>
+            <th>Tarjeta</th>
+            <th>Transacciones</th>
+            <th>Total</th>
+            <th>Ticket promedio</th>
           </tr>
-        {% empty %}
-          <tr>
-            <td colspan="4" class="muted">No hay tarjetas con movimiento en este periodo.</td>
-          </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {% for card in card_health.card_stats %}
+            <tr>
+              <td>{{ card.card__label }} · ••••{{ card.card__last4 }}</td>
+              <td>{{ card.count|format_number:0 }}</td>
+              <td>{{ card.total|format_number }}</td>
+              <td>{{ card.avg|format_number }}</td>
+            </tr>
+          {% empty %}
+            <tr>
+              <td colspan="4" class="muted">No hay tarjetas con movimiento en este periodo.</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
     <div class="idle-cards">
       <h3>Tarjetas sin uso reciente</h3>
       <ul>
@@ -299,6 +496,40 @@
       {% endfor %}
     </ul>
   </div>
+</section>
+
+<section class="section-card">
+  <div class="section-header">
+    <div>
+      <h2>Convertir en regla</h2>
+      <p class="muted">Comercios con múltiples transacciones sin categoría en este periodo.</p>
+    </div>
+  </div>
+  {% if uncategorized_merchants %}
+    <ul class="simple-list">
+      {% for merchant in uncategorized_merchants %}
+        <li>
+          <div>
+            <strong>{{ merchant.merchant_name }}</strong>
+            <p class="muted">
+              {{ merchant.count|format_number:0 }} transacciones sin categoría
+              {% if merchant.card_last4 %}· **** {{ merchant.card_last4 }}{% endif %}
+              {% if merchant.last_tx %}· última el {{ merchant.last_tx|date:"d M" }}{% endif %}
+            </p>
+          </div>
+          <div class="attention-amount">
+            <span>
+              {{ merchant.total|format_number }}
+              {% if merchant.currency_code %}{{ merchant.currency_code }}{% endif %}
+            </span>
+            <a class="btn btn-primary btn-small" href="{{ merchant.rule_url }}">Crear regla</a>
+          </div>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="muted">Por ahora no hay comercios repetidos sin categoría 🎉</p>
+  {% endif %}
 </section>
 
 <section class="section-grid">
@@ -390,5 +621,51 @@
       {% endfor %}
     </ul>
   </div>
+  <div class="section-card">
+    <div class="section-header">
+      <h2>Correcciones manuales</h2>
+      <p class="muted">Revisiones aplicadas durante el periodo</p>
+    </div>
+    <p class="muted">
+      Total en el periodo: <strong>{{ manual_review.count|format_number:0 }}</strong>
+    </p>
+    {% if manual_review.recent %}
+      <ul class="simple-list">
+        {% for correction in manual_review.recent %}
+          <li>
+            <div>
+              <strong>{{ correction.new_merchant_name|default:correction.transaction.merchant_name }}</strong>
+              <p class="muted">
+                {{ correction.created_at|date:"d M H:i" }} ·
+                {{ correction.new_category|default:"Sin categoría" }} ·
+                {{ correction.transaction.amount|format_number }} {{ correction.transaction.currency_code }}
+              </p>
+            </div>
+            <span class="status-pill status-pill-ok">
+              {{ correction.changed_fields|join:", " }}
+            </span>
+          </li>
+        {% endfor %}
+      </ul>
+      <div class="stacked-block">
+        <div>
+          <h3>Comercios frecuentes</h3>
+          <ul class="simple-list">
+            {% for merchant in manual_review.top_merchants %}
+              <li>
+                <span>{{ merchant.new_merchant_name|default:"(sin comercio)" }}</span>
+                <strong>{{ merchant.count|format_number:0 }}</strong>
+              </li>
+            {% empty %}
+              <li class="muted">Sin datos de comercios.</li>
+            {% endfor %}
+          </ul>
+        </div>
+      </div>
+    {% else %}
+      <p class="muted">Aún no hay correcciones en este rango.</p>
+    {% endif %}
+  </div>
 </section>
+</div>
 {% endblock %}

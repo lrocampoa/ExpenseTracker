@@ -16,17 +16,20 @@ from tracker import models
 @dataclass
 class CategorizationResult:
     category: models.Category
+    subcategory: Optional[models.Subcategory]
     confidence: float
     source: str
     rule_id: Optional[int] = None
 
 
 class RuleEngine:
+    DEFAULT_CONFIDENCE = 0.9
+
     def evaluate(self, trx: models.Transaction) -> Optional[CategorizationResult]:
         rules = (
             models.CategoryRule.objects.select_related("category")
             .filter(is_active=True)
-            .order_by("priority", "-confidence", "name")
+            .order_by("priority", "match_value")
         )
         if hasattr(models.CategoryRule, "user_id") and trx.user_id:
             rules = rules.filter(Q(user=trx.user) | Q(user__isnull=True))
@@ -34,7 +37,8 @@ class RuleEngine:
             if self._matches_rule(rule, trx):
                 return CategorizationResult(
                     category=rule.category,
-                    confidence=rule.confidence,
+                    subcategory=rule.subcategory,
+                    confidence=self.DEFAULT_CONFIDENCE,
                     source=f"rule:{rule.id}",
                     rule_id=rule.id,
                 )
@@ -42,10 +46,6 @@ class RuleEngine:
 
     def _matches_rule(self, rule: models.CategoryRule, trx: models.Transaction) -> bool:
         if rule.card_last4 and trx.card_last4 and rule.card_last4 != trx.card_last4:
-            return False
-        if rule.min_amount and trx.amount and trx.amount < rule.min_amount:
-            return False
-        if rule.max_amount and trx.amount and trx.amount > rule.max_amount:
             return False
 
         if rule.match_type == models.CategoryRule.MatchType.ALWAYS:
@@ -109,6 +109,7 @@ def categorize_transaction(trx: models.Transaction, allow_llm: Optional[bool] = 
 def _apply_result(trx: models.Transaction, result: CategorizationResult) -> None:
     with db_transaction.atomic():
         trx.category = result.category
+        trx.subcategory = result.subcategory
         trx.category_confidence = result.confidence
         trx.category_source = result.source
         metadata = trx.metadata or {}
@@ -122,6 +123,7 @@ def _apply_result(trx: models.Transaction, result: CategorizationResult) -> None
         trx.metadata = metadata
         trx.save(update_fields=[
             "category",
+            "subcategory",
             "category_confidence",
             "category_source",
             "metadata",

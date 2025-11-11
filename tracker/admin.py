@@ -7,7 +7,7 @@ from . import models
 
 @admin.register(models.Category)
 class CategoryAdmin(admin.ModelAdmin):
-    list_display = ("name", "code", "is_active", "updated_at")
+    list_display = ("name", "code", "budget_limit", "is_active", "updated_at")
     list_filter = ("is_active",)
     search_fields = ("name", "code")
     ordering = ("name",)
@@ -47,12 +47,13 @@ class TransactionAdmin(admin.ModelAdmin):
         "transaction_date",
         "parse_status",
         "category",
+        "subcategory",
         "category_source",
         "email_message_link",
     )
-    list_filter = ("parse_status", "currency_code", "category")
+    list_filter = ("parse_status", "currency_code", "category", "subcategory")
     search_fields = ("merchant_name", "reference_id", "card_last4")
-    autocomplete_fields = ("email", "card", "category")
+    autocomplete_fields = ("email", "card", "category", "subcategory")
     readonly_fields = ("email_message_link",)
 
     def email_message_link(self, obj):
@@ -123,12 +124,68 @@ class GmailSyncStateAdmin(admin.ModelAdmin):
 
 @admin.register(models.CategoryRule)
 class CategoryRuleAdmin(admin.ModelAdmin):
-    list_display = ("name", "category", "match_field", "match_type", "priority", "is_active")
-    list_filter = ("match_field", "match_type", "is_active", "category")
-    search_fields = ("name", "match_value", "notes")
-    autocomplete_fields = ("category",)
+    list_display = ("match_value", "category", "subcategory", "match_field", "match_type", "priority", "is_active", "origin")
+    list_filter = ("match_field", "match_type", "is_active", "category", "subcategory", "origin")
+    search_fields = ("match_value", "notes")
+    autocomplete_fields = ("category", "subcategory")
 
     def save_model(self, request, obj, form, change):
         if hasattr(obj, "user") and not obj.user:
             obj.user = request.user
         super().save_model(request, obj, form, change)
+
+
+@admin.register(models.TransactionCorrection)
+class TransactionCorrectionAdmin(admin.ModelAdmin):
+    list_display = (
+        "transaction",
+        "user",
+        "previous_category",
+        "new_category",
+        "previous_subcategory",
+        "new_subcategory",
+        "created_at",
+    )
+    list_filter = ("changed_fields", "new_category")
+    search_fields = (
+        "transaction__merchant_name",
+        "previous_merchant_name",
+        "new_merchant_name",
+    )
+    readonly_fields = (
+        "previous_merchant_name",
+        "new_merchant_name",
+        "previous_description",
+        "new_description",
+        "previous_amount",
+        "new_amount",
+        "previous_currency_code",
+        "new_currency_code",
+        "previous_transaction_date",
+        "new_transaction_date",
+        "changed_fields",
+        "previous_subcategory",
+        "new_subcategory",
+    )
+
+
+@admin.register(models.Subcategory)
+class SubcategoryAdmin(admin.ModelAdmin):
+    list_display = ("name", "category", "budget_limit", "updated_at")
+    list_filter = ("category",)
+    search_fields = ("name", "code", "category__name")
+
+
+@admin.register(models.RuleSuggestion)
+class RuleSuggestionAdmin(admin.ModelAdmin):
+    list_display = ("merchant_name", "category", "card_last4", "status", "user", "created_at")
+    list_filter = ("status", "category")
+    search_fields = ("merchant_name", "category__name", "user__email")
+    autocomplete_fields = ("category", "transaction", "correction", "user")
+
+
+@admin.register(models.ExpenseAccount)
+class ExpenseAccountAdmin(admin.ModelAdmin):
+    list_display = ("name", "user", "is_default", "created_at")
+    list_filter = ("is_default",)
+    search_fields = ("name", "user__email")

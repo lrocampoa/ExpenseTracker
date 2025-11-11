@@ -31,7 +31,8 @@
           <a class="sidebar-link" href="{% url 'tracker:transaction_list' %}">🧾 Transacciones</a>
           <a class="sidebar-link" href="{% url 'tracker:import' %}">⬇️ Importar movimientos</a>
           <a class="sidebar-link" href="{% url 'tracker:cards' %}">💳 Tarjetas</a>
-          <a class="sidebar-link" href="#">🧾 Reglas y categorías</a>
+          <a class="sidebar-link" href="{% url 'tracker:categories' %}">📂 Categorías & Presupuestos</a>
+          <a class="sidebar-link" href="{% url 'tracker:rules' %}">🧾 Reglas y automatización</a>
           <a class="sidebar-link" href="#">📬 Gmail y tokens</a>
           <a class="sidebar-link" href="#">🤖 Agentes / LLM</a>
           <a class="sidebar-link" href="#">⚙️ Preferencias</a>
@@ -52,6 +53,7 @@
     <footer class="app-footer">
       <p>Expense Tracker &middot; {% now 'Y' %}</p>
     </footer>
+    <script src="{% static 'tracker/inline-table.js' %}"></script>
     {% block extra_scripts %}{% endblock %}
   </body>
 </html>

@@ -7,6 +7,7 @@ google-auth==2.37.0
 google-auth-httplib2==0.2.0
 google-auth-oauthlib==1.2.1
 openai==1.51.2
+httpx<0.28
 beautifulsoup4==4.12.3
 django-allauth==65.0.2
 PyJWT==2.9.0

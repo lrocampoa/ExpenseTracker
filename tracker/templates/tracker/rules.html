@@ -1,0 +1,176 @@
+{% extends "tracker/base.html" %}
+{% block title %}Reglas de categorización{% endblock %}
+{% block content %}
+<section class="section-card">
+  <div class="section-header">
+    <div>
+      <p class="eyebrow">Automatización</p>
+      <h1>Reglas de categorización</h1>
+      <p class="muted">Administra reglas existentes y acepta sugerencias del sistema.</p>
+    </div>
+  </div>
+  <div class="rules-grid">
+    <div>
+      <h2>Sugerencias pendientes</h2>
+      {% if suggestions %}
+        <ul class="suggestion-list">
+          {% for suggestion in suggestions %}
+            <li>
+              <div>
+                <strong>{{ suggestion.merchant_name }}</strong>
+                <p class="muted">
+                  → {{ suggestion.category.name }}{% if suggestion.card_last4 %} · **** {{ suggestion.card_last4 }}{% endif %}
+                </p>
+              </div>
+              <div class="suggestion-actions">
+                <form method="post">
+                  {% csrf_token %}
+                  <input type="hidden" name="action" value="accept_suggestion">
+                  <input type="hidden" name="suggestion_id" value="{{ suggestion.pk }}">
+                  <button type="submit" class="btn btn-primary btn-small">Aceptar</button>
+                </form>
+                <form method="post">
+                  {% csrf_token %}
+                  <input type="hidden" name="action" value="reject_suggestion">
+                  <input type="hidden" name="suggestion_id" value="{{ suggestion.pk }}">
+                  <input type="hidden" name="reason" value="Rechazada manualmente">
+                  <button type="submit" class="btn btn-secondary btn-small">Rechazar</button>
+                </form>
+              </div>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="muted">No hay sugerencias pendientes.</p>
+      {% endif %}
+    </div>
+    <div>
+      <h2>¿Cómo funcionan?</h2>
+      <p class="muted">
+        Las reglas usan coincidencias de texto sobre el comercio, descripción o tarjeta para asignar
+        automáticamente una categoría. Puedes crear una nueva regla desde el botón “Nueva regla”.
+      </p>
+    </div>
+  </div>
+</section>
+
+<section class="section-card section-table" id="new-rule">
+  <div class="section-header">
+    <div>
+      <h2>Reglas existentes</h2>
+      <p class="muted">Incluye origen para identificar si fue sembrada, manual o sugerida.</p>
+    </div>
+    <div class="section-actions">
+      <form method="post" class="inline-action-form">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="run_rules">
+        <button type="submit" class="btn btn-secondary btn-ghost">Correr reglas</button>
+      </form>
+      <button type="button" class="btn btn-primary" data-create-toggle="rule-create">Nueva regla</button>
+    </div>
+  </div>
+  <div class="table-card" id="rules-table">
+    <div class="table-wrapper">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Match</th>
+            <th>Categoría</th>
+            <th>Campo</th>
+            <th>Prioridad</th>
+            <th>Origen</th>
+            <th>Acciones</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="inline-row {% if rule_create_open %}is-visible{% endif %}" data-create-row="rule-create">
+            <td colspan="6">
+              <form method="post" class="inline-edit-form" data-inline-form>
+                {% csrf_token %}
+                <input type="hidden" name="action" value="create_rule">
+                <div class="inline-grid">
+                  <div class="inline-field">
+                    <label for="{{ rule_create_form.match_value.id_for_label }}">Valor a buscar</label>
+                    {{ rule_create_form.match_value }}
+                    {{ rule_create_form.match_value.errors }}
+                  </div>
+                  <div class="inline-field">
+                    <label for="{{ rule_create_form.category.id_for_label }}">Categoría</label>
+                    {{ rule_create_form.category }}
+                    {{ rule_create_form.category.errors }}
+                  </div>
+                  <div class="inline-field">
+                    <label for="{{ rule_create_form.subcategory.id_for_label }}">Subcategoría</label>
+                    {{ rule_create_form.subcategory }}
+                    {{ rule_create_form.subcategory.errors }}
+                  </div>
+                  <div class="inline-field">
+                    <label for="{{ rule_create_form.match_field.id_for_label }}">Campo</label>
+                    {{ rule_create_form.match_field }}
+                    {{ rule_create_form.match_field.errors }}
+                  </div>
+                  <div class="inline-field">
+                    <label for="{{ rule_create_form.match_type.id_for_label }}">Tipo de coincidencia</label>
+                    {{ rule_create_form.match_type }}
+                    {{ rule_create_form.match_type.errors }}
+                  </div>
+                  <div class="inline-field">
+                    <label for="{{ rule_create_form.card_last4.id_for_label }}">Tarjeta (opcional)</label>
+                    {{ rule_create_form.card_last4 }}
+                    {{ rule_create_form.card_last4.errors }}
+                  </div>
+                  <div class="inline-field">
+                    <label for="{{ rule_create_form.priority.id_for_label }}">Prioridad</label>
+                    {{ rule_create_form.priority }}
+                    {{ rule_create_form.priority.errors }}
+                  </div>
+                  <label class="inline-checkbox" for="{{ rule_create_form.is_active.id_for_label }}">
+                    {{ rule_create_form.is_active }}
+                    Activa
+                  </label>
+                  {{ rule_create_form.is_active.errors }}
+                  <div class="inline-field inline-span-2">
+                    <label for="{{ rule_create_form.notes.id_for_label }}">Notas</label>
+                    {{ rule_create_form.notes }}
+                    {{ rule_create_form.notes.errors }}
+                  </div>
+                </div>
+                {{ rule_create_form.non_field_errors }}
+                <div class="inline-actions">
+                  <button type="button" class="btn btn-secondary" data-create-cancel="rule-create">Cancelar</button>
+                  <button type="submit" class="btn btn-primary">Guardar regla</button>
+                </div>
+              </form>
+            </td>
+          </tr>
+          {% for rule in rules %}
+            <tr>
+              <td>{{ rule.match_value|default:"(sin texto)" }}</td>
+              <td>
+                {{ rule.category.name }}
+                {% if rule.subcategory %}
+                  <div class="muted">{{ rule.subcategory.name }}</div>
+                {% endif %}
+              </td>
+              <td>{{ rule.get_match_field_display }} · {{ rule.get_match_type_display }}</td>
+              <td>{{ rule.priority }}</td>
+              <td><span class="status-pill">{{ rule.get_origin_display }}</span></td>
+              <td class="table-actions">
+                <a class="btn btn-secondary btn-ghost" href="{% url 'tracker:rule_edit' rule.pk %}">Editar</a>
+                <form method="post" class="inline-action-form" data-inline-form data-confirm="¿Eliminar la regla «{{ rule.match_value|default:'(sin texto)' }}»?">
+                  {% csrf_token %}
+                  <input type="hidden" name="action" value="delete_rule">
+                  <input type="hidden" name="rule_id" value="{{ rule.pk }}">
+                  <button type="submit" class="btn btn-secondary btn-danger">Eliminar</button>
+                </form>
+              </td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="6" class="muted">Aún no hay reglas.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+{% endblock %}

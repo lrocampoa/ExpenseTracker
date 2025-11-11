@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from datetime import timedelta
 from decimal import Decimal
@@ -9,7 +10,7 @@ from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.db.models import Avg, Count, Max, Q, Sum
 from django.db.models.functions import TruncDate, TruncMonth
-from django.shortcuts import redirect
+from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse, reverse_lazy
 from django.utils import timezone
 from django.utils.http import urlencode
@@ -20,13 +21,34 @@ from django.views.generic.edit import FormMixin
 from google_auth_oauthlib.flow import Flow
 
 from tracker import models
-from tracker.forms import CardForm, CardLabelForm, ImportForm, TransactionFilterForm, TransactionUpdateForm
+from tracker.forms import (
+    CardForm,
+    CardLabelForm,
+    CategoryForm,
+    CategoryInlineForm,
+    CategoryRuleForm,
+    ImportForm,
+    RuleSuggestionDecisionForm,
+    SubcategoryForm,
+    SubcategoryInlineForm,
+    TransactionFilterForm,
+    TransactionUpdateForm,
+)
+from tracker.services import account_seeding
+from tracker.services import category_seeding
+from tracker.services import corrections as correction_service
 from tracker.services import parser as parser_service
+from tracker.services import rule_seeding
+from tracker.services import rule_suggestions
+from tracker.services import rules as rules_service
+from tracker.services import categorizer
 from tracker.services.gmail import (
     GmailCredentialManager,
     GmailIngestionService,
     MissingCredentialsError,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class DashboardView(LoginRequiredMixin, TemplateView):
@@ -47,6 +69,9 @@ class DashboardView(LoginRequiredMixin, TemplateView):
             .exclude(transaction_date__isnull=True)
             .select_related("category", "card")
         )
+        expense_filter = self._resolve_expense_filter()
+        if expense_filter["value"]:
+            base_qs = base_qs.filter(card__expense_account=expense_filter["value"])
         period_qs = base_qs.filter(
             transaction_date__gte=period["start"], transaction_date__lte=period["end"]
         )
@@ -57,22 +82,28 @@ class DashboardView(LoginRequiredMixin, TemplateView):
         ).exclude(amount__isnull=True)
         prev_total = previous_amount_qs.aggregate(total=Sum("amount"))["total"] or Decimal("0")
         hero = self._build_hero(period_amount_qs, period, prev_total)
+        category_insights = self._build_category_insights(period_amount_qs, previous_amount_qs)
         context.update(
             {
                 "period": period,
                 "hero": hero,
                 "alerts": self._build_alerts(base_qs, period),
                 "spending_trend": self._build_trend(period_amount_qs),
-                "category_insights": self._build_category_insights(
-                    period_amount_qs, previous_amount_qs
-                ),
+                "category_insights": category_insights,
+                "category_budget_chart": self._build_category_budget_chart(category_insights),
                 "merchant_signals": self._build_merchant_signals(period_amount_qs, period),
                 "card_health": self._build_card_health(period_qs),
+                "expense_accounts": self._build_expense_accounts(
+                    period_amount_qs, previous_amount_qs
+                ),
                 "action_queue": self._build_action_queue(base_qs),
+                "uncategorized_merchants": self._build_uncategorized_merchants(period_qs),
                 "automation_insight": self._build_automation_insight(period_qs),
                 "llm_usage": self._build_llm_usage(period),
                 "sync_health": self._build_sync_health(),
-                "monthly_chart": self._build_monthly_chart(),
+                "monthly_chart": self._build_monthly_chart(expense_filter["value"]),
+                "manual_review": self._build_manual_review(period, expense_filter["value"]),
+                "expense_filter": expense_filter,
             }
         )
         return context
@@ -115,6 +146,30 @@ class DashboardView(LoginRequiredMixin, TemplateView):
         params = self.request.GET.copy()
         params["range"] = key
         return f"?{params.urlencode()}"
+
+    def _resolve_expense_filter(self):
+        names = self._expense_account_names()
+        selected = (self.request.GET.get("expense_account") or "").strip()
+        if selected and selected not in names:
+            selected = ""
+        return {
+            "value": selected,
+            "label": selected or "Todas las cuentas",
+            "options": [{"label": name, "value": name} for name in names],
+            "is_active": bool(selected),
+        }
+
+    def _expense_account_names(self):
+        account_seeding.ensure_default_accounts(self.request.user)
+        user_accounts = set(
+            models.ExpenseAccount.objects.filter(user=self.request.user).values_list("name", flat=True)
+        )
+        card_accounts = set(
+            models.Card.objects.filter(user=self.request.user)
+            .exclude(expense_account="")
+            .values_list("expense_account", flat=True)
+        )
+        return sorted(name for name in (user_accounts | card_accounts) if name)
 
     def _build_hero(self, qs, period, prev_total):
         total = qs.aggregate(total=Sum("amount"))["total"] or Decimal("0")
@@ -197,7 +252,7 @@ class DashboardView(LoginRequiredMixin, TemplateView):
 
     def _build_category_insights(self, current_qs, previous_qs):
         categories = list(
-            current_qs.values("category_id", "category__name")
+            current_qs.values("category_id", "category__name", "category__budget_limit")
             .annotate(total=Sum("amount"), count=Count("id"))
             .order_by("-total")
         )
@@ -215,12 +270,51 @@ class DashboardView(LoginRequiredMixin, TemplateView):
                 else None
             )
             item["label"] = item["category__name"] or "Sin categoría"
+            budget_limit = item.get("category__budget_limit")
+            item["budget_limit"] = budget_limit
+            if budget_limit not in (None, Decimal("0")):
+                item["budget_used_pct"] = (
+                    (item["total"] / budget_limit * Decimal("100")) if budget_limit else None
+                )
+                item["budget_remaining"] = budget_limit - item["total"]
+                item["budget_remaining_abs"] = abs(item["budget_remaining"])
+                item["is_budget_over"] = item["budget_remaining"] < 0
+                fill_pct = item["budget_used_pct"] or Decimal("0")
+                if fill_pct < 0:
+                    fill_pct = Decimal("0")
+                item["budget_fill_pct"] = float(min(fill_pct, Decimal("100")))
+            else:
+                item["budget_used_pct"] = None
+                item["budget_remaining"] = None
+                item["budget_remaining_abs"] = None
+                item["is_budget_over"] = False
+                item["budget_fill_pct"] = 0
         total_spend = sum((item["total"] for item in categories), Decimal("0"))
         for item in categories:
             item["share"] = (
                 (item["total"] / total_spend * Decimal("100")) if total_spend else Decimal("0")
             )
         return categories
+
+    def _build_category_budget_chart(self, category_rows, limit: int = 6):
+        chart_rows = []
+        for item in category_rows:
+            budget = item.get("budget_limit")
+            if not budget or budget in (None, Decimal("0")):
+                continue
+            used_pct = item.get("budget_used_pct") or Decimal("0")
+            chart_rows.append(
+                {
+                    "label": item["label"],
+                    "used_pct": used_pct,
+                    "fill_pct": float(min(max(used_pct, Decimal("0")), Decimal("150"))),
+                    "spent": item["total"],
+                    "budget": budget,
+                    "is_over": item.get("is_budget_over", False),
+                }
+            )
+        chart_rows.sort(key=lambda row: row["used_pct"], reverse=True)
+        return chart_rows[:limit]
 
     def _build_merchant_signals(self, qs, period):
         top_merchants = list(
@@ -276,6 +370,138 @@ class DashboardView(LoginRequiredMixin, TemplateView):
             "idle_cards": idle_cards,
         }
 
+    def _filter_expense_account_transactions(self, qs):
+        return (
+            qs.exclude(card__isnull=True)
+            .exclude(card__expense_account__isnull=True)
+            .exclude(card__expense_account__exact="")
+        )
+
+    def _build_expense_accounts(self, current_qs, previous_qs, limit: int = 6):
+        account_qs = self._filter_expense_account_transactions(current_qs)
+        aggregates = list(
+            account_qs.values("card__expense_account")
+            .annotate(
+                total=Sum("amount"),
+                count=Count("id"),
+                card_count=Count("card_id", distinct=True),
+            )
+            .order_by("-total")
+        )
+        if not aggregates:
+            return {"has_data": False, "rows": []}
+
+        previous_map = {
+            row["card__expense_account"]: row["total"]
+            for row in self._filter_expense_account_transactions(previous_qs)
+            .values("card__expense_account")
+            .annotate(total=Sum("amount"))
+        }
+        card_segments_raw = list(
+            account_qs.values("card__expense_account", "card__label", "card__last4")
+            .annotate(total=Sum("amount"))
+        )
+        card_segments_map = {}
+        for entry in card_segments_raw:
+            account_name = entry["card__expense_account"]
+            if not account_name:
+                continue
+            card_segments_map.setdefault(account_name, []).append(entry)
+        for segments in card_segments_map.values():
+            segments.sort(key=lambda segment: segment["total"], reverse=True)
+
+        palette = [
+            "#e4002b",
+            "#fb923c",
+            "#facc15",
+            "#0ea5e9",
+            "#22c55e",
+            "#8b5cf6",
+            "#ec4899",
+            "#14b8a6",
+        ]
+        grand_total = sum((row["total"] for row in aggregates), Decimal("0"))
+        max_total = aggregates[0]["total"] if aggregates else Decimal("0")
+        rows = []
+        visible_total = Decimal("0")
+        for idx, entry in enumerate(aggregates[:limit]):
+            label = entry["card__expense_account"]
+            total = entry["total"] or Decimal("0")
+            previous_total = previous_map.get(label, Decimal("0"))
+            delta = total - previous_total
+            delta_pct = (
+                (delta / previous_total * Decimal("100"))
+                if previous_total not in (None, Decimal("0"))
+                else None
+            )
+            share_pct = (
+                (total / grand_total * Decimal("100")) if grand_total else Decimal("0")
+            )
+            bar_pct = (
+                float(total / max_total * Decimal("100")) if max_total else 0.0
+            )
+
+            segments = []
+            for seg_idx, segment in enumerate(card_segments_map.get(label, [])[:3]):
+                seg_total = segment["total"] or Decimal("0")
+                seg_share = (
+                    (seg_total / total * Decimal("100")) if total else Decimal("0")
+                )
+                segments.append(
+                    {
+                        "label": segment.get("card__label") or "",
+                        "last4": segment.get("card__last4") or "",
+                        "amount": seg_total,
+                        "share_pct": seg_share,
+                        "width_pct": float(seg_share),
+                        "color": palette[(idx + seg_idx) % len(palette)],
+                    }
+                )
+
+            rows.append(
+                {
+                    "label": label,
+                    "total": total,
+                    "count": entry["count"],
+                    "card_count": entry["card_count"],
+                    "share_pct": share_pct,
+                    "bar_pct": bar_pct,
+                    "previous_total": previous_total,
+                    "delta": delta,
+                    "delta_pct": delta_pct,
+                    "segments": segments,
+                    "color": palette[idx % len(palette)],
+                }
+            )
+            visible_total += total
+
+        gradient_segments = []
+        cursor = Decimal("0")
+        for row in rows:
+            start = cursor
+            cursor += row["share_pct"]
+            gradient_segments.append(
+                f"{row['color']} {float(start):.2f}% {float(cursor):.2f}%"
+            )
+        if grand_total and visible_total < grand_total:
+            gradient_segments.append(
+                f"#d4d4d8 {float(cursor):.2f}% 100%"
+            )
+        pie_style = (
+            f"background: conic-gradient({', '.join(gradient_segments)});"
+            if gradient_segments
+            else ""
+        )
+        return {
+            "has_data": True,
+            "rows": rows,
+            "grand_total": grand_total,
+            "total_accounts": len(aggregates),
+            "visible_accounts": len(rows),
+            "others_total": grand_total - visible_total,
+            "pie_style": pie_style,
+        }
+
     def _build_action_queue(self, base_qs):
         high_amount_threshold = self._decimal_from_setting(
             "DASHBOARD_HIGH_AMOUNT_THRESHOLD", Decimal("250000")
@@ -291,6 +517,62 @@ class DashboardView(LoginRequiredMixin, TemplateView):
             .select_related("category", "card")[:8]
         )
         return attention
+
+    def _build_uncategorized_merchants(self, qs, limit: int = 5):
+        base = (
+            qs.filter(category__isnull=True)
+            .exclude(merchant_name__isnull=True)
+            .exclude(merchant_name__exact="")
+        )
+        aggregates = list(
+            base.values("merchant_name")
+            .annotate(
+                total=Sum("amount"),
+                count=Count("id"),
+                last_tx=Max("transaction_date"),
+                currency_code=Max("currency_code"),
+            )
+            .order_by("-count", "-total")[:limit]
+        )
+        if not aggregates:
+            return []
+        merchant_names = [row["merchant_name"] for row in aggregates]
+        cards = (
+            base.filter(merchant_name__in=merchant_names)
+            .exclude(card_last4__isnull=True)
+            .exclude(card_last4__exact="")
+            .values("merchant_name", "card_last4")
+            .annotate(card_count=Count("id"))
+        )
+        card_lookup = {}
+        for entry in cards:
+            card_lookup.setdefault(entry["merchant_name"], []).append(entry)
+        for entries in card_lookup.values():
+            entries.sort(key=lambda item: item["card_count"], reverse=True)
+        rules_url = reverse("tracker:rules")
+        top_merchants = []
+        for row in aggregates:
+            merchant = row["merchant_name"]
+            card_last4 = ""
+            if merchant in card_lookup and card_lookup[merchant]:
+                card_last4 = card_lookup[merchant][0]["card_last4"]
+            params = {"prefill_match_value": merchant}
+            if card_last4:
+                params["prefill_card_last4"] = card_last4
+            query = urlencode(params)
+            rule_url = f"{rules_url}?{query}#new-rule"
+            top_merchants.append(
+                {
+                    "merchant_name": merchant,
+                    "count": row["count"],
+                    "total": row["total"] or Decimal("0"),
+                    "last_tx": row["last_tx"],
+                    "card_last4": card_last4,
+                    "currency_code": row.get("currency_code") or "",
+                    "rule_url": rule_url,
+                }
+            )
+        return top_merchants
 
     def _build_automation_insight(self, qs):
         breakdown = list(
@@ -360,13 +642,15 @@ class DashboardView(LoginRequiredMixin, TemplateView):
         except (TypeError, ValueError, ArithmeticError):
             return default
 
-    def _build_monthly_chart(self, months: int = 9):
+    def _build_monthly_chart(self, expense_account: str | None = None, months: int = 9):
         end = timezone.now()
         start = (end - timedelta(days=months * 31)).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         qs = (
             models.Transaction.objects.filter(user=self.request.user, transaction_date__gte=start)
             .exclude(amount__isnull=True)
         )
+        if expense_account:
+            qs = qs.filter(card__expense_account=expense_account)
         aggregates = (
             qs.annotate(month=TruncMonth("transaction_date"))
             .values("month")
@@ -448,6 +732,33 @@ class DashboardView(LoginRequiredMixin, TemplateView):
             return date_obj.replace(year=date_obj.year + 1, month=1, day=1)
         return date_obj.replace(month=date_obj.month + 1, day=1)
 
+    def _build_manual_review(self, period, expense_account: str | None = None):
+        corrections_qs = (
+            models.TransactionCorrection.objects.filter(
+                transaction__user=self.request.user,
+                created_at__gte=period["start"],
+                created_at__lte=period["end"],
+            )
+            .select_related("transaction", "new_category", "user")
+            .order_by("-created_at")
+        )
+        if expense_account:
+            corrections_qs = corrections_qs.filter(
+                transaction__card__expense_account=expense_account
+            )
+        recent = list(corrections_qs[:5])
+        total = corrections_qs.count()
+        merchants = list(
+            corrections_qs.values("new_merchant_name")
+            .annotate(count=Count("id"))
+            .order_by("-count")[:5]
+        )
+        return {
+            "count": total,
+            "recent": recent,
+            "top_merchants": merchants,
+        }
+
 
 
 class TransactionListView(LoginRequiredMixin, ListView):
@@ -456,36 +767,21 @@ class TransactionListView(LoginRequiredMixin, ListView):
     paginate_by = 20
 
     def get_queryset(self):
-        qs = (
-            models.Transaction.objects.select_related("category", "card")
-            .order_by("-transaction_date", "-created_at")
-        )
-        if hasattr(models.Transaction, "user_id"):
-            qs = qs.filter(user=self.request.user)
-        self.filter_form = TransactionFilterForm(self.request.GET or None, user=self.request.user)
-        if self.filter_form.is_valid():
-            data = self.filter_form.cleaned_data
-            search = data.get("search")
-            if search:
-                qs = qs.filter(
-                    Q(merchant_name__icontains=search)
-                    | Q(description__icontains=search)
-                    | Q(reference_id__icontains=search)
-                )
-            if data.get("category"):
-                qs = qs.filter(category=data["category"])
-            if data.get("card_last4"):
-                qs = qs.filter(card_last4=data["card_last4"])
-            if data.get("date_from"):
-                qs = qs.filter(transaction_date__date__gte=data["date_from"])
-            if data.get("date_to"):
-                qs = qs.filter(transaction_date__date__lte=data["date_to"])
-            if data.get("min_amount") is not None:
-                qs = qs.filter(amount__gte=data["min_amount"])
-            if data.get("max_amount") is not None:
-                qs = qs.filter(amount__lte=data["max_amount"])
+        qs, form = self._build_filtered_queryset(self.request.GET or None)
+        self.filter_form = form
         self.filtered_queryset = qs
         return qs
+
+    def post(self, request, *args, **kwargs):
+        if request.POST.get("action") != "reprocess":
+            return self.get(request, *args, **kwargs)
+        qs, form = self._build_filtered_queryset(request.POST)
+        if not form.is_valid():
+            messages.error(request, "No se pudieron aplicar los filtros para reprocesar.")
+            return redirect(self._redirect_with_filters(form.data))
+        stats = self._reprocess_transactions(qs)
+        self._notify_reprocess_result(stats)
+        return redirect(self._redirect_with_filters(form.data))
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -500,6 +796,46 @@ class TransactionListView(LoginRequiredMixin, ListView):
         context["querystring"] = self._build_querystring()
         context["quick_months"] = self._month_shortcuts()
         return context
+
+    def _build_filtered_queryset(self, data):
+        qs = (
+            models.Transaction.objects.select_related("category", "subcategory", "card")
+            .order_by("-transaction_date", "-created_at")
+        )
+        if hasattr(models.Transaction, "user_id"):
+            qs = qs.filter(user=self.request.user)
+        form = TransactionFilterForm(data, user=self.request.user)
+        if form.is_valid():
+            qs = self._apply_filters(qs, form.cleaned_data)
+        return qs, form
+
+    def _apply_filters(self, qs, data):
+        search = data.get("search")
+        if search:
+            qs = qs.filter(
+                Q(merchant_name__icontains=search)
+                | Q(description__icontains=search)
+                | Q(reference_id__icontains=search)
+            )
+        if data.get("category"):
+            qs = qs.filter(category=data["category"])
+        if data.get("subcategory"):
+            qs = qs.filter(subcategory=data["subcategory"])
+        if data.get("merchant"):
+            qs = qs.filter(merchant_name=data["merchant"])
+        if data.get("uncategorized"):
+            qs = qs.filter(category__isnull=True)
+        if data.get("card_last4"):
+            qs = qs.filter(card_last4=data["card_last4"])
+        if data.get("date_from"):
+            qs = qs.filter(transaction_date__date__gte=data["date_from"])
+        if data.get("date_to"):
+            qs = qs.filter(transaction_date__date__lte=data["date_to"])
+        if data.get("min_amount") is not None:
+            qs = qs.filter(amount__gte=data["min_amount"])
+        if data.get("max_amount") is not None:
+            qs = qs.filter(amount__lte=data["max_amount"])
+        return qs
 
     def _build_querystring(self) -> str:
         params = self.request.GET.copy()
@@ -526,6 +862,77 @@ class TransactionListView(LoginRequiredMixin, ListView):
                 }
             )
         return months
+
+    def _reprocess_transactions(self, queryset):
+        stats = {
+            "total": queryset.count(),
+            "processed": 0,
+            "skipped_manual": 0,
+            "skipped_missing_email": 0,
+            "failed": 0,
+        }
+        for transaction in queryset.iterator():
+            metadata = transaction.metadata or {}
+            if metadata.get("manual_override"):
+                stats["skipped_manual"] += 1
+                continue
+            if not transaction.email_id:
+                stats["skipped_missing_email"] += 1
+                continue
+            try:
+                parser_service.create_transaction_from_email(
+                    transaction.email, existing_transaction=transaction
+                )
+            except Exception:  # pragma: no cover - log and continue
+                stats["failed"] += 1
+                logger.exception("Error reprocesando transacción %s", transaction.pk)
+            else:
+                stats["processed"] += 1
+        return stats
+
+    def _notify_reprocess_result(self, stats):
+        total = stats["total"]
+        processed = stats["processed"]
+        if total == 0:
+            messages.info(self.request, "No hay transacciones para reprocesar con los filtros actuales.")
+            return
+        if processed:
+            messages.success(
+                self.request,
+                f"Reprocesadas {processed} de {total} transacciones con los filtros actuales.",
+            )
+        else:
+            messages.warning(
+                self.request,
+                "No se reprocesó ninguna transacción. Revisa si solo hay cambios manuales.",
+            )
+        if stats["skipped_manual"]:
+            messages.info(
+                self.request,
+                f"{stats['skipped_manual']} transacciones se omitieron por tener ajustes manuales.",
+            )
+        if stats["skipped_missing_email"]:
+            messages.info(
+                self.request,
+                f"{stats['skipped_missing_email']} transacciones no tienen correo para reprocesar.",
+            )
+        if stats["failed"]:
+            messages.error(
+                self.request,
+                f"{stats['failed']} transacciones no pudieron reprocesarse. Revisa los registros.",
+            )
+
+    def _redirect_with_filters(self, data):
+        base_url = reverse("tracker:transaction_list")
+        if not data:
+            return base_url
+        params = {}
+        for key in TransactionFilterForm.base_fields.keys():
+            value = data.get(key)
+            if value not in (None, "", []):
+                params[key] = value
+        query = urlencode(params)
+        return f"{base_url}?{query}" if query else base_url
 
 
 class TransactionDetailView(LoginRequiredMixin, FormMixin, DetailView):
@@ -558,13 +965,28 @@ class TransactionDetailView(LoginRequiredMixin, FormMixin, DetailView):
 
     def post(self, request, *args, **kwargs):
         self.object = self.get_object()
-        if request.POST.get("action") == "reparse":
+        self._before_snapshot = correction_service.snapshot_transaction(self.object)
+        action = request.POST.get("action")
+        if action == "reparse":
             return self._handle_reparse()
+        if action == "promote_rule":
+            return self._handle_promote_rule()
         form = self.get_form()
         if form.is_valid():
-            form.save()
             return self.form_valid(form)
         return self.form_invalid(form)
+
+    def form_valid(self, form):
+        before_snapshot = getattr(self, "_before_snapshot", None)
+        self.object = form.save()
+        if before_snapshot:
+            correction_service.record_manual_correction(
+                self.object,
+                self.request.user,
+                before_snapshot,
+            )
+        messages.success(self.request, "Transacción actualizada manualmente.")
+        return super().form_valid(form)
 
     def _handle_reparse(self):
         if not self.object.email:
@@ -575,6 +997,21 @@ class TransactionDetailView(LoginRequiredMixin, FormMixin, DetailView):
         )
         self.object.refresh_from_db()
         messages.success(self.request, "Transacción reprocesada desde el correo.")
+        return redirect(self.get_success_url())
+
+    def _handle_promote_rule(self):
+        try:
+            result = rules_service.create_rule_from_transaction(self.object, self.request.user)
+        except rules_service.RulePromotionError as exc:
+            messages.error(self.request, str(exc))
+        else:
+            if result.created:
+                messages.success(
+                    self.request,
+                    f"Regla creada para {result.rule.match_value or 'valor'}",
+                )
+            else:
+                messages.info(self.request, "Ya existe una regla con este comercio y categoría.")
         return redirect(self.get_success_url())
 
 
@@ -684,6 +1121,7 @@ class CardListView(LoginRequiredMixin, TemplateView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
+        account_seeding.ensure_default_accounts(self.request.user)
         expense_choices = self._expense_choices()
         error_forms = kwargs.get("error_forms") or {}
         context["card_rows"] = self._build_card_rows(
@@ -694,14 +1132,17 @@ class CardListView(LoginRequiredMixin, TemplateView):
 
     def _expense_choices(self):
         user = self.request.user
-        accounts = (
+        existing_accounts = set(
+            models.ExpenseAccount.objects.filter(user=user).values_list("name", flat=True)
+        )
+        card_accounts = set(
             models.Card.objects.filter(user=user)
             .exclude(expense_account="")
             .values_list("expense_account", flat=True)
             .order_by("expense_account")
             .distinct()
         )
-        return list(accounts)
+        return sorted(existing_accounts | card_accounts)
 
     def _build_card_rows(self, expense_choices, error_forms=None):
         user = self.request.user
@@ -774,3 +1215,314 @@ class CardUpdateView(LoginRequiredMixin, UpdateView):
 
     def get_success_url(self):
         return reverse_lazy("tracker:cards")
+
+
+class CategoryRuleListView(LoginRequiredMixin, TemplateView):
+    template_name = "tracker/rules.html"
+
+    def get(self, request, *args, **kwargs):
+        rule_seeding.ensure_defaults(request.user)
+        return super().get(request, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        action = request.POST.get("action")
+        if action == "create_rule":
+            return self._handle_create_rule(request)
+        if action == "run_rules":
+            return self._handle_run_rules(request)
+        if action == "update_rule":
+            return self._handle_update_rule(request)
+        if action == "delete_rule":
+            return self._handle_delete_rule(request)
+        if action in {"accept_suggestion", "reject_suggestion"}:
+            return self._handle_suggestion(request, action)
+        return redirect("tracker:rules")
+
+    def _handle_create_rule(self, request):
+        form = CategoryRuleForm(request.POST, user=request.user)
+        if form.is_valid():
+            rule = form.save()
+            rule.origin = models.CategoryRule.Origin.MANUAL
+            rule.save(update_fields=["origin", "updated_at"])
+            messages.success(request, "Regla creada.")
+            return redirect("tracker:rules")
+        self.rule_form = form
+        self.rule_create_open = True
+        return self.get(request)
+
+    def _handle_suggestion(self, request, action: str):
+        suggestion_id = request.POST.get("suggestion_id")
+        suggestion = get_object_or_404(
+            models.RuleSuggestion,
+            pk=suggestion_id,
+            user=request.user,
+            status=models.RuleSuggestion.Status.PENDING,
+        )
+        if action == "accept_suggestion":
+            rule_suggestions.apply_suggestion(suggestion)
+            messages.success(request, "Sugerencia aceptada y regla creada.")
+        else:
+            reason = request.POST.get("reason", "")
+            rule_suggestions.reject_suggestion(suggestion, reason)
+            messages.info(request, "Sugerencia rechazada.")
+        return redirect("tracker:rules")
+
+    def _handle_delete_rule(self, request):
+        rule_id = request.POST.get("rule_id")
+        if not rule_id:
+            messages.error(request, "No se encontró la regla.")
+            return redirect("tracker:rules")
+        qs = models.CategoryRule.objects.all()
+        if hasattr(models.CategoryRule, "user_id"):
+            qs = qs.filter(user=request.user)
+        deleted, _ = qs.filter(pk=rule_id).delete()
+        if deleted:
+            messages.success(request, "Regla eliminada.")
+        else:
+            messages.error(request, "No se pudo eliminar la regla.")
+        return redirect("tracker:rules")
+
+    def _handle_run_rules(self, request):
+        qs = (
+            models.Transaction.objects.filter(user=request.user)
+            .select_related("category")
+        )
+        uncategorized = qs.filter(category__isnull=True)
+        updated = 0
+        for trx in uncategorized.iterator(chunk_size=200):
+            result = categorizer.categorize_transaction(trx, allow_llm=False)
+            if result is not None:
+                updated += 1
+        if updated:
+            messages.success(request, f"Se actualizaron {updated} transacciones con categorías.")
+        else:
+            messages.info(request, "No había transacciones pendientes de categorías.")
+        return redirect("tracker:rules")
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["rules"] = self._rule_queryset()
+        rule_form = getattr(self, "rule_form", None)
+        if not rule_form:
+            initial = self._prefill_rule_initial()
+            if initial:
+                self.rule_create_open = True
+            rule_form = CategoryRuleForm(user=self.request.user, initial=initial)
+        context["rule_create_form"] = rule_form
+        context["rule_create_open"] = getattr(self, "rule_create_open", False)
+        context["suggestions"] = self._suggestion_queryset()
+        return context
+
+    def _rule_queryset(self):
+        qs = models.CategoryRule.objects.select_related("category", "subcategory")
+        if hasattr(models.CategoryRule, "user_id"):
+            qs = qs.filter(user=self.request.user)
+        return qs.order_by("priority", "match_value")
+
+    def _prefill_rule_initial(self) -> dict[str, str]:
+        initial: dict[str, str] = {}
+        match_value = (self.request.GET.get("prefill_match_value") or "").strip()
+        if match_value:
+            initial["match_value"] = match_value
+        card_last4 = (self.request.GET.get("prefill_card_last4") or "").strip()
+        if card_last4 and card_last4.isdigit():
+            initial["card_last4"] = card_last4[-4:]
+        return initial
+
+    def _suggestion_queryset(self):
+        qs = models.RuleSuggestion.objects.filter(
+            status=models.RuleSuggestion.Status.PENDING
+        ).select_related("category", "transaction")
+        if hasattr(models.RuleSuggestion, "user_id"):
+            qs = qs.filter(user=self.request.user)
+        return qs.order_by("-created_at")
+
+    def _handle_update_rule(self, request):
+        rule_id = request.POST.get("rule_id")
+        rule_qs = models.CategoryRule.objects.all()
+        if hasattr(models.CategoryRule, "user_id"):
+            rule_qs = rule_qs.filter(user=request.user)
+        rule = get_object_or_404(rule_qs, pk=rule_id)
+        form = CategoryRuleForm(request.POST, instance=rule, user=request.user)
+        if form.is_valid():
+            form.save()
+            messages.success(request, "Regla actualizada.")
+        else:
+            for error in form.errors.values():
+                messages.error(request, error)
+        return redirect("tracker:rules")
+
+    def _handle_delete_rule(self, request):
+        rule_id = request.POST.get("rule_id")
+        rule_qs = models.CategoryRule.objects.all()
+        if hasattr(models.CategoryRule, "user_id"):
+            rule_qs = rule_qs.filter(user=request.user)
+        rule = get_object_or_404(rule_qs, pk=rule_id)
+        rule.delete()
+        messages.success(request, "Regla eliminada.")
+        return redirect("tracker:rules")
+
+
+class CategoryManageView(LoginRequiredMixin, TemplateView):
+    template_name = "tracker/category_manage.html"
+
+    def get(self, request, *args, **kwargs):
+        category_seeding.ensure_defaults(request.user)
+        return super().get(request, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        action = request.POST.get("action")
+        if action == "create_category":
+            return self._handle_category_form(request)
+        if action == "create_subcategory":
+            return self._handle_subcategory_form(request)
+        if action == "update_category":
+            return self._handle_update_category(request)
+        if action == "update_subcategory":
+            return self._handle_update_subcategory(request)
+        if action == "delete_category":
+            return self._handle_delete_category(request)
+        if action == "delete_subcategory":
+            return self._handle_delete_subcategory(request)
+        return redirect("tracker:categories")
+
+    def _handle_category_form(self, request):
+        form = CategoryForm(request.POST, user=request.user)
+        if form.is_valid():
+            form.save()
+            messages.success(request, "Categoría creada.")
+            return redirect("tracker:categories")
+        self.category_form = form
+        self.category_create_open = True
+        return self.get(request)
+
+    def _handle_subcategory_form(self, request):
+        form = SubcategoryForm(request.POST, user=request.user)
+        if form.is_valid():
+            form.save()
+            messages.success(request, "Subcategoría creada.")
+            return redirect("tracker:categories")
+        self.subcategory_form = form
+        self.subcategory_create_open = True
+        return self.get(request)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        categories = list(self._category_tree())
+        for category in categories:
+            category.inline_form = CategoryInlineForm(
+                instance=category,
+                user=self.request.user,
+                auto_id=f"id_cat_{category.id}_%s",
+            )
+        subcategories = list(self._subcategory_list())
+        for subcategory in subcategories:
+            subcategory.inline_form = SubcategoryInlineForm(
+                instance=subcategory,
+                user=self.request.user,
+                auto_id=f"id_sub_{subcategory.id}_%s",
+            )
+        context["categories"] = categories
+        context["subcategories"] = subcategories
+        context["category_create_form"] = getattr(
+            self, "category_form", CategoryForm(user=self.request.user)
+        )
+        context["subcategory_create_form"] = getattr(
+            self, "subcategory_form", SubcategoryForm(user=self.request.user)
+        )
+        context["category_create_open"] = getattr(self, "category_create_open", False)
+        context["subcategory_create_open"] = getattr(self, "subcategory_create_open", False)
+        return context
+
+    def _category_tree(self):
+        qs = (
+            models.Category.objects.filter(user=self.request.user)
+            .prefetch_related("subcategories")
+            .order_by("name")
+        )
+        return qs
+
+    def _subcategory_list(self):
+        return (
+            models.Subcategory.objects.filter(user=self.request.user)
+            .select_related("category")
+            .order_by("category__name", "name")
+        )
+
+    def _handle_update_category(self, request):
+        category_id = request.POST.get("category_id")
+        category = get_object_or_404(
+            models.Category,
+            pk=category_id,
+            user=request.user,
+        )
+        form = CategoryInlineForm(request.POST, instance=category, user=request.user)
+        if form.is_valid():
+            form.save()
+            messages.success(request, "Categoría actualizada.")
+        else:
+            for error in form.errors.values():
+                messages.error(request, error)
+        return redirect("tracker:categories")
+
+    def _handle_update_subcategory(self, request):
+        subcategory_id = request.POST.get("subcategory_id")
+        subcategory = get_object_or_404(
+            models.Subcategory,
+            pk=subcategory_id,
+            user=request.user,
+        )
+        form = SubcategoryInlineForm(request.POST, instance=subcategory, user=request.user)
+        if form.is_valid():
+            form.save()
+            messages.success(request, "Subcategoría actualizada.")
+        else:
+            for error in form.errors.values():
+                messages.error(request, error)
+        return redirect("tracker:categories")
+
+    def _handle_delete_category(self, request):
+        category_id = request.POST.get("category_id")
+        category = get_object_or_404(
+            models.Category,
+            pk=category_id,
+            user=request.user,
+        )
+        category.delete()
+        messages.success(request, "Categoría eliminada.")
+        return redirect("tracker:categories")
+
+    def _handle_delete_subcategory(self, request):
+        subcategory_id = request.POST.get("subcategory_id")
+        subcategory = get_object_or_404(
+            models.Subcategory,
+            pk=subcategory_id,
+            user=request.user,
+        )
+        subcategory.delete()
+        messages.success(request, "Subcategoría eliminada.")
+        return redirect("tracker:categories")
+
+
+class CategoryRuleUpdateView(LoginRequiredMixin, UpdateView):
+    template_name = "tracker/rule_form.html"
+    form_class = CategoryRuleForm
+    model = models.CategoryRule
+
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs["user"] = self.request.user
+        return kwargs
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        if hasattr(models.CategoryRule, "user_id"):
+            qs = qs.filter(user=self.request.user)
+        return qs
+
+    def form_valid(self, form):
+        messages.success(self.request, "Regla actualizada.")
+        return super().form_valid(form)
+
+    def get_success_url(self):
+        return reverse_lazy("tracker:rules")

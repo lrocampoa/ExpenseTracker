@@ -16,7 +16,10 @@ class TransactionViewsTests(TestCase):
         self.user = User.objects.create_user(username="tester", email="user@example.com", password="pass1234")
         self.client.force_login(self.user)
         self.factory = RequestFactory()
-        self.category = models.Category.objects.create(code="food", name="Alimentación")
+        category_kwargs = {"code": "food", "defaults": {"name": "Alimentación"}}
+        if hasattr(models.Category, "user_id"):
+            category_kwargs["user"] = self.user
+        self.category, _ = models.Category.objects.get_or_create(**category_kwargs)
         email_kwargs = {
             "gmail_message_id": "abc123",
             "subject": "Compra",
@@ -46,6 +49,44 @@ class TransactionViewsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Test Merchant")
 
+    @mock.patch("tracker.views.parser_service.create_transaction_from_email")
+    def test_reprocess_action_invokes_parser_and_skips_manual(self, mock_reprocess):
+        email_kwargs = {
+            "gmail_message_id": "abc124",
+            "subject": "Compra 2",
+            "sender": "test@example.com",
+            "raw_body": "",
+        }
+        if hasattr(models.EmailMessage, "user_id"):
+            email_kwargs["user"] = self.user
+        second_email = models.EmailMessage.objects.create(**email_kwargs)
+        manual_transaction_kwargs = {
+            "email": second_email,
+            "merchant_name": "Manual",
+            "amount": Decimal("5.00"),
+            "currency_code": "CRC",
+            "transaction_date": timezone.now(),
+            "reference_id": "ref-2",
+            "metadata": {"manual_override": {"fields": ["category"]}},
+        }
+        if hasattr(models.Transaction, "user_id"):
+            manual_transaction_kwargs["user"] = self.user
+        models.Transaction.objects.create(**manual_transaction_kwargs)
+        url = reverse("tracker:transaction_list")
+        response = self.client.post(url, {"action": "reprocess"}, follow=True)
+        self.assertEqual(response.status_code, 200)
+        mock_reprocess.assert_called_once_with(self.transaction.email, existing_transaction=self.transaction)
+        self.assertContains(response, "Reprocesadas 1 de 2 transacciones")
+        self.assertContains(response, "se omitieron por tener ajustes manuales")
+
+    @mock.patch("tracker.views.parser_service.create_transaction_from_email")
+    def test_reprocess_action_preserves_filters_on_redirect(self, mock_reprocess):
+        url = reverse("tracker:transaction_list")
+        response = self.client.post(url, {"action": "reprocess", "search": "Test"})
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("search=Test", response["Location"])
+        mock_reprocess.assert_called_once()
+
     def test_detail_view_inline_update(self):
         url = reverse("tracker:transaction_detail", args=[self.transaction.pk])
         response = self.client.post(
@@ -63,6 +104,254 @@ class TransactionViewsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.transaction.refresh_from_db()
         self.assertEqual(self.transaction.merchant_name, "Nuevo Comercio")
+        corrections = models.TransactionCorrection.objects.filter(transaction=self.transaction)
+        self.assertEqual(corrections.count(), 1)
+        correction = corrections.first()
+        self.assertEqual(correction.previous_merchant_name, "Test Merchant")
+        self.assertEqual(correction.new_merchant_name, "Nuevo Comercio")
+        self.assertEqual(correction.previous_category, self.category)
+        self.assertEqual(correction.new_category, self.category)
+        self.assertIn("manual_override", self.transaction.metadata)
+        self.assertEqual(self.transaction.category_source, "manual")
+        self.assertEqual(self.transaction.category_confidence, 1.0)
+        self.assertTrue(
+            models.RuleSuggestion.objects.filter(
+                user=self.user, merchant_name="Nuevo Comercio", status="pending"
+            ).exists()
+        )
+
+    def test_detail_view_no_change_does_not_create_correction(self):
+        url = reverse("tracker:transaction_detail", args=[self.transaction.pk])
+        self.transaction.transaction_date = self.transaction.transaction_date.replace(second=0, microsecond=0)
+        self.transaction.save(update_fields=["transaction_date"])
+        response = self.client.post(
+            url,
+            {
+                "merchant_name": "Test Merchant",
+                "description": self.transaction.description,
+                "amount": "12.50",
+                "currency_code": "CRC",
+                "transaction_date": self.transaction.transaction_date.strftime("%Y-%m-%dT%H:%M"),
+                "category": self.category.pk,
+            },
+            follow=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(
+            models.TransactionCorrection.objects.filter(transaction=self.transaction).exists()
+        )
+
+    def test_dashboard_manual_corrections_context(self):
+        correction = models.TransactionCorrection.objects.create(
+            transaction=self.transaction,
+            user=self.user,
+            previous_category=self.category,
+            new_category=self.category,
+            previous_merchant_name="Viejo",
+            new_merchant_name="Nuevo",
+            changed_fields=["merchant_name"],
+        )
+        url = reverse("tracker:dashboard")
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Correcciones manuales")
+        context = response.context
+        self.assertIn("manual_review", context)
+        review = context["manual_review"]
+        self.assertEqual(review["count"], 1)
+        self.assertEqual(review["recent"][0], correction)
+
+    def test_dashboard_expense_accounts_context(self):
+        card = models.Card.objects.create(
+            user=self.user,
+            label="Tarjeta Azul",
+            last4="1111",
+            expense_account="Viajes",
+        )
+        now = timezone.now()
+        models.Transaction.objects.create(
+            email=self.email,
+            user=self.user,
+            card=card,
+            amount=Decimal("200.00"),
+            currency_code="CRC",
+            merchant_name="Viajes CR",
+            transaction_date=now - timedelta(days=5),
+            reference_id="ref-current",
+            card_last4="1111",
+        )
+        models.Transaction.objects.create(
+            email=self.email,
+            user=self.user,
+            card=card,
+            amount=Decimal("50.00"),
+            currency_code="CRC",
+            merchant_name="Viajes CR",
+            transaction_date=now - timedelta(days=35),
+            reference_id="ref-previous",
+            card_last4="1111",
+        )
+        response = self.client.get(reverse("tracker:dashboard"))
+        self.assertEqual(response.status_code, 200)
+        expense_accounts = response.context["expense_accounts"]
+        self.assertTrue(expense_accounts["has_data"])
+        row = expense_accounts["rows"][0]
+        self.assertEqual(row["label"], "Viajes")
+        self.assertEqual(row["total"], Decimal("200.00"))
+        self.assertEqual(row["previous_total"], Decimal("50.00"))
+        self.assertGreater(row["bar_pct"], 0)
+        self.assertEqual(row["segments"][0]["last4"], "1111")
+
+    def test_dashboard_expense_filter_limits_totals(self):
+        self.category.budget_limit = Decimal("500.00")
+        self.category.save(update_fields=["budget_limit"])
+        viajes_card = models.Card.objects.create(
+            user=self.user, label="Viajes", last4="2222", expense_account="Viajes"
+        )
+        hogar_card = models.Card.objects.create(
+            user=self.user, label="Hogar", last4="3333", expense_account="Casa"
+        )
+        now = timezone.now()
+        models.Transaction.objects.create(
+            email=self.email,
+            user=self.user,
+            card=viajes_card,
+            category=self.category,
+            amount=Decimal("120.00"),
+            currency_code="CRC",
+            merchant_name="Hotel",
+            transaction_date=now - timedelta(days=3),
+            reference_id="viajes-current",
+            card_last4="2222",
+        )
+        models.Transaction.objects.create(
+            email=self.email,
+            user=self.user,
+            card=hogar_card,
+            category=self.category,
+            amount=Decimal("80.00"),
+            currency_code="CRC",
+            merchant_name="Compras Casa",
+            transaction_date=now - timedelta(days=4),
+            reference_id="hogar-current",
+            card_last4="3333",
+        )
+        url = reverse("tracker:dashboard") + "?expense_account=Viajes"
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        expense_filter = response.context["expense_filter"]
+        self.assertTrue(expense_filter["is_active"])
+        self.assertEqual(expense_filter["label"], "Viajes")
+        hero = response.context["hero"]
+        self.assertEqual(hero["total_spend"], Decimal("120.00"))
+        category_rows = response.context["category_insights"]
+        self.assertEqual(category_rows[0]["total"], Decimal("120.00"))
+        self.assertEqual(category_rows[0]["budget_remaining"], Decimal("380.00"))
+        self.assertContains(response, "Presupuesto global")
+
+    def test_dashboard_category_budget_chart_context(self):
+        other_category = models.Category.objects.create(
+            user=self.user,
+            code="transporte-extra",
+            name="Transporte",
+            budget_limit=Decimal("200.00"),
+        )
+        self.category.budget_limit = Decimal("100.00")
+        self.category.save(update_fields=["budget_limit"])
+        now = timezone.now()
+        for cat, amount in ((self.category, Decimal("80.00")), (other_category, Decimal("150.00"))):
+            models.Transaction.objects.create(
+                email=self.email,
+                user=self.user,
+                category=cat,
+                amount=amount,
+                currency_code="CRC",
+                transaction_date=now - timedelta(days=2),
+                reference_id=f"ref-{cat.code}",
+            )
+        response = self.client.get(reverse("tracker:dashboard"))
+        self.assertEqual(response.status_code, 200)
+        chart = response.context["category_budget_chart"]
+        self.assertEqual(len(chart), 2)
+        self.assertGreater(chart[0]["used_pct"], chart[1]["used_pct"])
+
+    def test_promote_rule_creates_category_rule(self):
+        self.transaction.card_last4 = "7777"
+        self.transaction.save(update_fields=["card_last4"])
+        url = reverse("tracker:transaction_detail", args=[self.transaction.pk])
+        response = self.client.post(url, {"action": "promote_rule"}, follow=True)
+        self.assertEqual(response.status_code, 200)
+        rule = models.CategoryRule.objects.get(
+            user=self.user,
+            match_value="Test Merchant",
+        )
+        self.assertEqual(rule.category, self.category)
+        self.assertEqual(rule.card_last4, "7777")
+        self.assertEqual(rule.match_field, models.CategoryRule.MatchField.MERCHANT)
+
+    def test_promote_rule_requires_category(self):
+        self.transaction.category = None
+        self.transaction.save(update_fields=["category"])
+        url = reverse("tracker:transaction_detail", args=[self.transaction.pk])
+        response = self.client.post(url, {"action": "promote_rule"}, follow=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(
+            models.CategoryRule.objects.filter(
+                user=self.user,
+                match_value="Test Merchant",
+            ).exists()
+        )
+
+    def test_rules_view_accept_suggestion(self):
+        suggestion = models.RuleSuggestion.objects.create(
+            user=self.user,
+            merchant_name="Nuevo",
+            category=self.category,
+            card_last4="",
+            transaction=self.transaction,
+        )
+        url = reverse("tracker:rules")
+        response = self.client.post(
+            url,
+            {
+                "action": "accept_suggestion",
+                "suggestion_id": suggestion.pk,
+            },
+            follow=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        suggestion.refresh_from_db()
+        self.assertEqual(suggestion.status, "accepted")
+        self.assertTrue(
+            models.CategoryRule.objects.filter(
+                user=self.user,
+                match_value="Nuevo",
+                origin=models.CategoryRule.Origin.SUGGESTED,
+            ).exists()
+        )
+
+    def test_rules_view_create_rule(self):
+        url = reverse("tracker:rules")
+        response = self.client.post(
+            url,
+            {
+                "action": "create_rule",
+                "category": self.category.pk,
+                "match_field": models.CategoryRule.MatchField.MERCHANT,
+                "match_type": models.CategoryRule.MatchType.CONTAINS,
+                "match_value": "Test Merchant",
+                "priority": 90,
+                "is_active": True,
+            },
+            follow=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(
+            models.CategoryRule.objects.filter(
+                user=self.user,
+                match_value="Test Merchant",
+            ).exists()
+        )
 
     @override_settings(LLM_CATEGORIZATION_ENABLED=False)
     def test_reparse_action(self):
@@ -200,6 +489,9 @@ class TransactionViewsTests(TestCase):
         card = models.Card.objects.get(user=self.user, last4="9999")
         self.assertEqual(card.label, "Mi tarjeta")
         self.assertEqual(card.expense_account, "Gastos Hogar")
+        self.assertTrue(
+            models.ExpenseAccount.objects.filter(user=self.user, name="Gastos Hogar").exists()
+        )
 
     def test_label_card_updates_existing_record(self):
         card = models.Card.objects.create(
@@ -224,6 +516,9 @@ class TransactionViewsTests(TestCase):
         card.refresh_from_db()
         self.assertEqual(card.label, "Principal editada")
         self.assertEqual(card.expense_account, "Viajes")
+        self.assertTrue(
+            models.ExpenseAccount.objects.filter(user=self.user, name="Viajes").exists()
+        )
 
     def test_label_card_selects_existing_account(self):
         existing = models.Card.objects.create(
@@ -247,6 +542,15 @@ class TransactionViewsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         existing.refresh_from_db()
         self.assertEqual(existing.expense_account, "Compras")
+
+    def test_default_expense_accounts_seeded(self):
+        models.ExpenseAccount.objects.filter(user=self.user).delete()
+        url = reverse("tracker:cards")
+        self.client.get(url)
+        for name in ["Personal", "Familiar", "Ahorros"]:
+            self.assertTrue(
+                models.ExpenseAccount.objects.filter(user=self.user, name=name).exists()
+            )
 
     def test_edit_card_view(self):
         card = models.Card.objects.create(
@@ -273,6 +577,44 @@ class TransactionViewsTests(TestCase):
         self.assertEqual(card.label, "Principal editada")
         self.assertEqual(card.expense_account, "Viajes")
         self.assertFalse(card.is_active)
+
+    def test_category_manage_creates_category(self):
+        url = reverse("tracker:categories")
+        response = self.client.post(
+            url,
+            {
+                "action": "create_category",
+                "name": "Salud",
+                "code": "salud",
+                "description": "Gastos médicos",
+                "budget_limit": "75000",
+                "is_active": True,
+            },
+            follow=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(
+            models.Category.objects.filter(user=self.user, code="salud").exists()
+        )
+
+    def test_category_manage_creates_subcategory(self):
+        category = models.Category.objects.create(user=self.user, code="viajes", name="Viajes")
+        url = reverse("tracker:categories")
+        response = self.client.post(
+            url,
+            {
+                "action": "create_subcategory",
+                "category": category.pk,
+                "name": "Hospedaje",
+                "code": "hospedaje",
+                "budget_limit": "50000",
+            },
+            follow=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(
+            models.Subcategory.objects.filter(user=self.user, category=category, code="hospedaje").exists()
+        )
 
     def test_dashboard_sync_health_flags_stale_states(self):
         models.GmailSyncState.objects.create(

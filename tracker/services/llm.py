@@ -136,8 +136,8 @@ def _call_openai_for_category(trx: models.Transaction):
         f"Amount: {trx.amount} {trx.currency_code}\n"
     )
 
-    client = OpenAI(api_key=settings.OPENAI_API_KEY)
     try:
+        client = OpenAI(api_key=settings.OPENAI_API_KEY)
         response = client.chat.completions.create(
             model=settings.OPENAI_MODEL,
             temperature=0.2,

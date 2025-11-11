@@ -4,6 +4,7 @@ from django import forms
 from django.db.models import Q
 
 from tracker import models
+from tracker.services import account_seeding
 
 
 class TransactionFilterForm(forms.Form):
@@ -12,8 +13,12 @@ class TransactionFilterForm(forms.Form):
         super().__init__(*args, **kwargs)
         qs = models.Category.objects.filter(is_active=True)
         if user is not None and hasattr(models.Category, "user_id"):
-            qs = qs.filter(Q(user=user) | Q(user__isnull=True))
+            qs = qs.filter(user=user)
         self.fields["category"].queryset = qs.order_by("name")
+        sub_qs = models.Subcategory.objects.select_related("category")
+        if user is not None and hasattr(models.Subcategory, "user_id"):
+            sub_qs = sub_qs.filter(user=user)
+        self.fields["subcategory"].queryset = sub_qs.order_by("category__name", "name")
 
         card_choices = [("", "Todas las tarjetas")]
         card_qs = models.Card.objects.filter(is_active=True)
@@ -31,15 +36,42 @@ class TransactionFilterForm(forms.Form):
         unique_last4 = sorted({val for val in last4_values if val})
         card_choices += [(val, f"**** {val}") for val in unique_last4]
         self.fields["card_last4"].choices = card_choices
+
+        merchant_choices = [("", "Todos los comercios")]
+        merchant_qs = models.Transaction.objects.exclude(merchant_name="")
+        if user is not None and hasattr(models.Transaction, "user_id"):
+            merchant_qs = merchant_qs.filter(user=user)
+        merchant_names = (
+            merchant_qs.order_by("merchant_name")
+            .values_list("merchant_name", flat=True)
+            .distinct()
+        )
+        merchant_choices += [(name, name) for name in merchant_names]
+        self.fields["merchant"].choices = merchant_choices
     search = forms.CharField(
         required=False,
         label="Buscar",
         widget=forms.TextInput(attrs={"placeholder": "Comercio, descripción o referencia"}),
     )
+    merchant = forms.ChoiceField(
+        required=False,
+        label="Comercio",
+        choices=[],
+    )
     category = forms.ModelChoiceField(
         queryset=models.Category.objects.filter(is_active=True).order_by("name"),
         required=False,
         label="Categoría",
+        empty_label="Todas",
+    )
+    uncategorized = forms.BooleanField(
+        required=False,
+        label="Solo sin categoría",
+    )
+    subcategory = forms.ModelChoiceField(
+        queryset=models.Subcategory.objects.none(),
+        required=False,
+        label="Subcategoría",
         empty_label="Todas",
     )
     card_last4 = forms.ChoiceField(
@@ -74,6 +106,20 @@ class TransactionFilterForm(forms.Form):
             raise forms.ValidationError("Use solo dígitos para la tarjeta.")
         return data
 
+    def clean(self):
+        cleaned = super().clean()
+        category = cleaned.get("category")
+        subcategory = cleaned.get("subcategory")
+        uncategorized = cleaned.get("uncategorized")
+        if subcategory and category and subcategory.category != category:
+            self.add_error("subcategory", "La subcategoría no pertenece a la categoría seleccionada.")
+        if uncategorized and (category or subcategory):
+            self.add_error(
+                "uncategorized",
+                "No combines el filtro de 'sin categoría' con una categoría o subcategoría específica.",
+            )
+        return cleaned
+
 
 class TransactionUpdateForm(forms.ModelForm):
     def __init__(self, *args, user=None, **kwargs):
@@ -81,8 +127,12 @@ class TransactionUpdateForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         qs = models.Category.objects.filter(is_active=True)
         if user is not None and hasattr(models.Category, "user_id"):
-            qs = qs.filter(Q(user=user) | Q(user__isnull=True))
+            qs = qs.filter(user=user)
         self.fields["category"].queryset = qs.order_by("name")
+        sub_qs = models.Subcategory.objects.select_related("category")
+        if user is not None and hasattr(models.Subcategory, "user_id"):
+            sub_qs = sub_qs.filter(user=user)
+        self.fields["subcategory"].queryset = sub_qs.order_by("category__name", "name")
 
     class Meta:
         model = models.Transaction
@@ -93,14 +143,19 @@ class TransactionUpdateForm(forms.ModelForm):
             "currency_code",
             "transaction_date",
             "category",
+            "subcategory",
         ]
         widgets = {
             "transaction_date": forms.DateTimeInput(attrs={"type": "datetime-local"}),
         }
 
-    def clean_transaction_date(self):
-        value = self.cleaned_data.get("transaction_date")
-        return value
+    def clean(self):
+        cleaned = super().clean()
+        category = cleaned.get("category")
+        subcategory = cleaned.get("subcategory")
+        if subcategory and subcategory.category != category:
+            self.add_error("subcategory", "La subcategoría no pertenece a la categoría seleccionada.")
+        return cleaned
 
 
 class CardForm(forms.ModelForm):
@@ -209,6 +264,8 @@ class CardLabelForm(forms.Form):
             "label": self.cleaned_data["label"],
             "expense_account": self.cleaned_data.get("resolved_expense_account", ""),
         }
+        if payload["expense_account"]:
+            account_seeding.ensure_account(self.user, payload["expense_account"])
         if card_id:
             card = models.Card.objects.get(pk=card_id, user=self.user)
             for attr, value in payload.items():
@@ -220,6 +277,127 @@ class CardLabelForm(forms.Form):
             last4=self.cleaned_data["last4"],
             **payload,
         )
+
+
+class CategoryRuleForm(forms.ModelForm):
+    class Meta:
+        model = models.CategoryRule
+        fields = [
+            "category",
+            "subcategory",
+            "match_field",
+            "match_type",
+            "match_value",
+            "card_last4",
+            "priority",
+            "is_active",
+            "notes",
+        ]
+
+    def __init__(self, *args, user=None, **kwargs):
+        self.user = user
+        super().__init__(*args, **kwargs)
+        qs = models.Category.objects.all()
+        if user is not None and hasattr(models.Category, "user_id"):
+            qs = qs.filter(user=user)
+        self.fields["category"].queryset = qs.order_by("name")
+        sub_qs = models.Subcategory.objects.select_related("category")
+        if user is not None and hasattr(models.Subcategory, "user_id"):
+            sub_qs = sub_qs.filter(user=user)
+        self.fields["subcategory"].queryset = sub_qs.order_by("category__name", "name")
+        self.fields["subcategory"].empty_label = "Sin subcategoría"
+
+    def clean(self):
+        cleaned = super().clean()
+        category = cleaned.get("category")
+        subcategory = cleaned.get("subcategory")
+        if subcategory and category and subcategory.category_id != category.id:
+            self.add_error(
+                "subcategory",
+                "La subcategoría no pertenece a la categoría seleccionada.",
+            )
+        return cleaned
+
+    def save(self, commit=True):
+        obj = super().save(commit=False)
+        if hasattr(obj, "user_id") and not obj.user_id:
+            obj.user = self.user
+        if commit:
+            obj.save()
+        return obj
+
+
+class RuleSuggestionDecisionForm(forms.Form):
+    suggestion_id = forms.IntegerField(widget=forms.HiddenInput())
+    action = forms.ChoiceField(
+        choices=(("accept", "Aceptar"), ("reject", "Rechazar")),
+        widget=forms.HiddenInput(),
+    )
+    reason = forms.CharField(required=False, widget=forms.Textarea(attrs={"rows": 2}), max_length=255)
+
+
+class CategoryForm(forms.ModelForm):
+    class Meta:
+        model = models.Category
+        fields = ["name", "code", "description", "budget_limit", "is_active"]
+
+    def __init__(self, *args, user=None, **kwargs):
+        self.user = user
+        super().__init__(*args, **kwargs)
+
+    def save(self, commit=True):
+        obj = super().save(commit=False)
+        if hasattr(obj, "user") and not obj.user:
+            obj.user = self.user
+        if commit:
+            obj.save()
+        return obj
+
+
+class SubcategoryForm(forms.ModelForm):
+    class Meta:
+        model = models.Subcategory
+        fields = ["category", "name", "code", "budget_limit"]
+
+    def __init__(self, *args, user=None, **kwargs):
+        self.user = user
+        super().__init__(*args, **kwargs)
+        qs = models.Category.objects.filter(is_active=True)
+        if user is not None and hasattr(models.Category, "user_id"):
+            qs = qs.filter(Q(user=user))
+        self.fields["category"].queryset = qs.order_by("name")
+
+    def save(self, commit=True):
+        obj = super().save(commit=False)
+        if hasattr(obj, "user") and not obj.user:
+            obj.user = self.user
+        if commit:
+            obj.save()
+        return obj
+
+
+class CategoryInlineForm(forms.ModelForm):
+    class Meta:
+        model = models.Category
+        fields = ["name", "description", "budget_limit", "is_active"]
+
+    def __init__(self, *args, user=None, **kwargs):
+        self.user = user
+        super().__init__(*args, **kwargs)
+
+
+class SubcategoryInlineForm(forms.ModelForm):
+    class Meta:
+        model = models.Subcategory
+        fields = ["category", "name", "budget_limit"]
+
+    def __init__(self, *args, user=None, **kwargs):
+        self.user = user
+        super().__init__(*args, **kwargs)
+        qs = models.Category.objects.all()
+        if user is not None and hasattr(models.Category, "user_id"):
+            qs = qs.filter(Q(user=user))
+        self.fields["category"].queryset = qs.order_by("name")
 
 
 class ImportForm(forms.Form):

@@ -1,4 +1,5 @@
 {% extends 'tracker/base.html' %}
+{% load static formatting %}
 {% block title %}Transacciones{% endblock %}
 {% block content %}
 <section class="filter-card">
@@ -16,8 +17,22 @@
         {{ filter_form.search }}
       </div>
       <div>
+        {{ filter_form.merchant.label_tag }}
+        {{ filter_form.merchant }}
+      </div>
+      <div>
         {{ filter_form.category.label_tag }}
         {{ filter_form.category }}
+      </div>
+      <div class="checkbox-field">
+        <label>
+          {{ filter_form.uncategorized }}
+          <span>{{ filter_form.uncategorized.label }}</span>
+        </label>
+      </div>
+      <div>
+        {{ filter_form.subcategory.label_tag }}
+        {{ filter_form.subcategory }}
       </div>
       <div>
         {{ filter_form.card_last4.label_tag }}
@@ -62,6 +77,34 @@
   </div>
 </section>
 
+<section class="actions-card">
+  <form method="post" class="reprocess-form" data-transaction-count="{{ result_count }}">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="reprocess">
+    {% for key, value in request.GET.items %}
+      {% if key != 'page' %}
+      <input type="hidden" name="{{ key }}" value="{{ value }}">
+      {% endif %}
+    {% endfor %}
+    <div class="reprocess-banner">
+      <div>
+        <h4>Reprocesar transacciones filtradas</h4>
+        <p class="muted">Aplica las reglas y tarjetas más recientes sobre el conjunto filtrado.</p>
+        <p class="muted small">Se procesarán {{ result_count|format_number:0 }} transacciones.</p>
+      </div>
+      <div class="reprocess-actions">
+        <button type="submit" class="btn btn-primary" data-reprocess-button>Reprocesar</button>
+        <div class="reprocess-progress" data-reprocess-progress hidden>
+          <span class="spinner"></span>
+          <span class="muted small">
+            Reprocesando <strong>{{ result_count|format_number:0 }}</strong> transacciones...
+          </span>
+        </div>
+      </div>
+    </div>
+  </form>
+</section>
+
 <section class="transactions-card">
   <div class="transactions-list">
     {% for transaction in transactions %}
@@ -78,6 +121,9 @@
         <div class="badges">
           {% if transaction.category %}
           <span class="badge">{{ transaction.category.name }}</span>
+          {% endif %}
+          {% if transaction.subcategory %}
+          <span class="badge badge-muted">{{ transaction.subcategory.name }}</span>
           {% endif %}
           {% if transaction.card_last4 %}
           <span class="badge badge-muted">**** {{ transaction.card_last4 }}</span>
@@ -115,4 +161,9 @@
   </div>
   {% endif %}
 </section>
+{% endblock %}
+
+{% block extra_scripts %}
+  {{ block.super }}
+  <script src="{% static 'tracker/reprocess.js' %}"></script>
 {% endblock %}

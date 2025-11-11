@@ -1,0 +1,244 @@
+{% extends "tracker/base.html" %}
+{% block title %}Categorías{% endblock %}
+{% block content %}
+<section class="section-card section-table">
+  <div class="section-header">
+    <div>
+      <h2>Categorías existentes</h2>
+      <p class="muted">Vista tabular de tus categorías y su presupuesto asignado.</p>
+    </div>
+    <div class="section-actions">
+      <button type="button" class="btn btn-primary" data-create-toggle="category-create">Nueva categoría</button>
+    </div>
+  </div>
+  <div class="table-card" id="categories-table">
+    <div class="table-wrapper">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Categoría</th>
+            <th class="text-right">Presupuesto</th>
+            <th class="text-right">Acciones</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="inline-row {% if category_create_open %}is-visible{% endif %}" data-create-row="category-create">
+            <td colspan="3">
+              <form method="post" class="inline-edit-form" data-inline-form>
+                {% csrf_token %}
+                <input type="hidden" name="action" value="create_category">
+                <div class="inline-grid">
+                  <div class="inline-field">
+                    <label for="{{ category_create_form.name.id_for_label }}">Nombre</label>
+                    {{ category_create_form.name }}
+                    {{ category_create_form.name.errors }}
+                  </div>
+                  <div class="inline-field">
+                    <label for="{{ category_create_form.code.id_for_label }}">Código</label>
+                    {{ category_create_form.code }}
+                    {{ category_create_form.code.errors }}
+                  </div>
+                  <div class="inline-field">
+                    <label for="{{ category_create_form.budget_limit.id_for_label }}">Presupuesto</label>
+                    {{ category_create_form.budget_limit }}
+                    {{ category_create_form.budget_limit.errors }}
+                  </div>
+                  <div class="inline-field inline-description">
+                    <label for="{{ category_create_form.description.id_for_label }}">Descripción</label>
+                    {{ category_create_form.description }}
+                    {{ category_create_form.description.errors }}
+                  </div>
+                  <label class="inline-checkbox" for="{{ category_create_form.is_active.id_for_label }}">
+                    {{ category_create_form.is_active }}
+                    Activa
+                  </label>
+                  {{ category_create_form.is_active.errors }}
+                </div>
+                {{ category_create_form.non_field_errors }}
+                <div class="inline-actions">
+                  <button type="button" class="btn btn-secondary" data-create-cancel="category-create">Cancelar</button>
+                  <button type="submit" class="btn btn-primary">Guardar categoría</button>
+                </div>
+              </form>
+            </td>
+          </tr>
+          {% if categories %}
+            {% for category in categories %}
+              <tr class="data-row">
+                <td>
+                  <span class="cell-title">{{ category.name }}</span>
+                  <span class="cell-caption">{{ category.description|default:"Sin descripción" }}</span>
+                </td>
+                <td class="cell-number">
+                  {% if category.budget_limit %}
+                    {{ category.budget_limit|format_number }}
+                  {% else %}
+                    <span class="muted">Sin límite</span>
+                  {% endif %}
+                </td>
+                <td class="table-actions">
+                  <button type="button" class="btn btn-secondary btn-ghost" data-edit-toggle="category-{{ category.id }}">Editar</button>
+                  <form method="post" class="inline-action-form" data-inline-form data-confirm="¿Eliminar la categoría «{{ category.name }}»?">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="delete_category">
+                    <input type="hidden" name="category_id" value="{{ category.id }}">
+                    <button type="submit" class="btn btn-secondary btn-danger">Eliminar</button>
+                  </form>
+                </td>
+              </tr>
+              <tr class="inline-row" data-edit-row="category-{{ category.id }}">
+                <td colspan="3">
+                  <form method="post" class="inline-edit-form" data-inline-form>
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="update_category">
+                    <input type="hidden" name="category_id" value="{{ category.id }}">
+                    <div class="inline-grid">
+                      <div class="inline-field">
+                        <label for="{{ category.inline_form.name.id_for_label }}">Nombre</label>
+                        {{ category.inline_form.name }}
+                        {{ category.inline_form.name.errors }}
+                      </div>
+                      <div class="inline-field">
+                        <label for="{{ category.inline_form.budget_limit.id_for_label }}">Presupuesto</label>
+                        {{ category.inline_form.budget_limit }}
+                        {{ category.inline_form.budget_limit.errors }}
+                      </div>
+                      <div class="inline-field inline-description">
+                        <label for="{{ category.inline_form.description.id_for_label }}">Descripción</label>
+                        {{ category.inline_form.description }}
+                        {{ category.inline_form.description.errors }}
+                      </div>
+                      <label class="inline-checkbox" for="{{ category.inline_form.is_active.id_for_label }}">
+                        {{ category.inline_form.is_active }}
+                        Activa
+                      </label>
+                      {{ category.inline_form.is_active.errors }}
+                    </div>
+                    {{ category.inline_form.non_field_errors }}
+                    <div class="inline-actions">
+                      <button type="button" class="btn btn-secondary" data-edit-cancel="category-{{ category.id }}">Cancelar</button>
+                      <button type="submit" class="btn btn-primary">Guardar cambios</button>
+                    </div>
+                  </form>
+                </td>
+              </tr>
+            {% endfor %}
+          {% else %}
+            <tr class="empty-row">
+              <td colspan="3">Todavía no has creado categorías.</td>
+            </tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="section-card section-table">
+  <div class="section-header">
+    <div>
+      <h2>Categorías & subcategorías</h2>
+      <p class="muted">Visualiza cada subcategoría junto a su categoría madre.</p>
+    </div>
+    <div class="section-actions">
+      <button type="button" class="btn btn-primary" data-create-toggle="subcategory-create">Nueva subcategoría</button>
+    </div>
+  </div>
+  <div class="table-card" id="subcategories-table">
+    <div class="table-wrapper">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Categoría</th>
+            <th>Subcategoría</th>
+            <th class="text-right">Acciones</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="inline-row {% if subcategory_create_open %}is-visible{% endif %}" data-create-row="subcategory-create">
+            <td colspan="3">
+              <form method="post" class="inline-edit-form" data-inline-form>
+                {% csrf_token %}
+                <input type="hidden" name="action" value="create_subcategory">
+                <div class="inline-grid">
+                  <div class="inline-field">
+                    <label for="{{ subcategory_create_form.category.id_for_label }}">Categoría</label>
+                    {{ subcategory_create_form.category }}
+                    {{ subcategory_create_form.category.errors }}
+                  </div>
+                  <div class="inline-field">
+                    <label for="{{ subcategory_create_form.name.id_for_label }}">Subcategoría</label>
+                    {{ subcategory_create_form.name }}
+                    {{ subcategory_create_form.name.errors }}
+                  </div>
+                  <div class="inline-field">
+                    <label for="{{ subcategory_create_form.code.id_for_label }}">Código</label>
+                    {{ subcategory_create_form.code }}
+                    {{ subcategory_create_form.code.errors }}
+                  </div>
+                </div>
+                {{ subcategory_create_form.non_field_errors }}
+                <div class="inline-actions">
+                  <button type="button" class="btn btn-secondary" data-create-cancel="subcategory-create">Cancelar</button>
+                  <button type="submit" class="btn btn-primary">Guardar subcategoría</button>
+                </div>
+              </form>
+            </td>
+          </tr>
+          {% if subcategories %}
+            {% for sub in subcategories %}
+              <tr class="data-row">
+                <td>
+                  <span class="cell-title">{{ sub.category.name }}</span>
+                </td>
+                <td>
+                  <span class="cell-title">{{ sub.name }}</span>
+                </td>
+                <td class="table-actions">
+                  <button type="button" class="btn btn-secondary btn-ghost" data-edit-toggle="subcategory-{{ sub.id }}">Editar</button>
+                  <form method="post" class="inline-action-form" data-inline-form data-confirm="¿Eliminar la subcategoría «{{ sub.name }}»?">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="delete_subcategory">
+                    <input type="hidden" name="subcategory_id" value="{{ sub.id }}">
+                    <button type="submit" class="btn btn-secondary btn-danger">Eliminar</button>
+                  </form>
+                </td>
+              </tr>
+              <tr class="inline-row" data-edit-row="subcategory-{{ sub.id }}">
+                <td colspan="3">
+                  <form method="post" class="inline-edit-form" data-inline-form>
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="update_subcategory">
+                    <input type="hidden" name="subcategory_id" value="{{ sub.id }}">
+                    <div class="inline-grid">
+                      <div class="inline-field">
+                        <label for="{{ sub.inline_form.category.id_for_label }}">Categoría</label>
+                        {{ sub.inline_form.category }}
+                        {{ sub.inline_form.category.errors }}
+                      </div>
+                      <div class="inline-field">
+                        <label for="{{ sub.inline_form.name.id_for_label }}">Subcategoría</label>
+                        {{ sub.inline_form.name }}
+                        {{ sub.inline_form.name.errors }}
+                      </div>
+                    </div>
+                    {{ sub.inline_form.non_field_errors }}
+                    <div class="inline-actions">
+                      <button type="button" class="btn btn-secondary" data-edit-cancel="subcategory-{{ sub.id }}">Cancelar</button>
+                      <button type="submit" class="btn btn-primary">Guardar cambios</button>
+                    </div>
+                  </form>
+                </td>
+              </tr>
+            {% endfor %}
+          {% else %}
+            <tr class="empty-row">
+              <td colspan="3">Aún no has creado subcategorías.</td>
+            </tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+{% endblock %}
