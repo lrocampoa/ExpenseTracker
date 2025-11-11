@@ -37,34 +37,46 @@
 ### Phase 0: Foundations
 - Initialize Django project + git repo structure.
 - Configure environment variables, secret management, base settings for Render.
-- Define base models (`EmailMessage`, `Transaction`, `Category`, `Card`).
+- Define base models (`EmailMessage`, `Transaction`, `Category`, `Card`). ✅
+- Setup virtualenv + requirements, configure `.env` scaffolding. ✅
+- Add login/signup/password-reset templates + responsive base layout. ✅
 
 ### Phase 1: Gmail Connectivity
-- Set up Google Cloud project + OAuth credentials.
-- Implement token storage/refresh (DB or encrypted file).
-- Build Gmail sync command: list messages filtered by sender/subject, fetch bodies, persist raw content and mark processed historyId checkpoint.
-- Add management command / worker job for periodic sync.
+- Set up Google Cloud project + OAuth credentials. ✅ (local + Allauth Google login for app auth)
+- Implement token storage/refresh (DB or encrypted file). ✅ (`GmailCredential` per user)
+- Build Gmail sync command: list messages filtered by sender/subject, fetch bodies, persist raw content and mark processed historyId checkpoint. ⚠️ *HistoryId checkpoint stored but incremental logic still pending*
+- Add management command / worker job for periodic sync. ✅ (`sync_gmail`, `run_pipeline`)
+- **Next:** tie Gmail sync, parsing, categorization to per-user cron jobs (Render) and finish historyId incremental pull.
 
 ### Phase 2: Parsing & Deduplication
-- Implement Bac Credomatic specific parser (HTML + regex) with unit tests using fixture emails.
-- Create confidence scoring + fallback logic; flag low-confidence items for manual review.
-- Ensure idempotency using Gmail message ID + hash of body.
+- Implement Bac Credomatic specific parser (HTML + regex) with unit tests using fixture emails. ✅ (multiple fixtures inc. USD)
+- Create confidence scoring + fallback logic; flag low-confidence items for manual review. ⚠️ *Still pending confidence flag + review queue*
+- Ensure idempotency using Gmail message ID + hash of body. ✅ (update_or_create + dedupe on reparse)
+- Provide a one-shot management command (`python manage.py run_pipeline`) so Render cron/worker can sync Gmail → process emails → categorize transactions without manual steps. ✅
+- Add “Reprocesar” controls in the UI to allow manual re-parsing of any transaction email when templates change. ✅
+- **Next:** add transaction `parse_confidence`, flagging + listing low-confidence entries for manual review.
 
 ### Phase 3: Categorization Engine
 - Build rules engine (keyword ↔ category mapping, card-based fallbacks).
 - Add optional lightweight agent/LLM call (e.g., GPT-4o-mini) when rules fail; cache responses in `LLMDecisionLog`.
 - Provide admin UI to correct categories and feed back into rules.
+- Allow promoting an LLM decision to a deterministic rule directly from Django admin.
+- Rules engine + LLM fallback complete, per-user aware. ✅
+- Admin supports editing categories/rules and promoting LLM decisions. ✅
+- Transaction detail UI lets users edit values inline; categorizer runs after parse/reparse. ✅
+- **Next:** dedicated “categorize correction” workflow that captures manual adjustments + suggests new rules automatically.
 
 ### Phase 4: API & UI
-- Django REST endpoints for transactions, categories, recount triggers.
+- Responsive transaction dashboard (filters, quick months, inline edit, Gmail email preview). ✅
+- Import wizard (connect Gmail, choose years, run pipeline) with Google OAuth start/callback. ✅
+- Manual reprocess button for any email. ✅
+- **Next:** Add DRF endpoints for mobile/app integrations and expose import status/progress via API.
+- **Upcoming:** Build a “Tarjetas” screen where users can (a) view masked cards with usage stats, (b) add/edit card metadata (nickname, bank, color), (c) toggle active/inactive, and (d) assign default categories/LLM preferences per card; expose CRUD endpoints to support it.
 - Minimal dashboard (table + filters) served via Django templates or DRF + React-lite later.
 - Manual reprocess button for any email.
 
 ### Phase 5: Deployment & Ops
-- Containerize (Docker) or use Render native buildpacks.
-- Provision managed Postgres + Redis (if using Celery/RQ).
-- Set up Render cron job for Gmail sync, environment secrets, health checks.
-- Add logging/monitoring (Sentry or simple email alerts) and cost guardrails (limits on LLM calls per day).
+- **Pending:** Docker/Render setup, Postgres/Redis provisioning, cron schedule for `run_pipeline`, monitoring/alerts, and cost-tracking dashboards. Add to upcoming backlog once pipeline is production-ready.
 
 ## 5. Agent / LLM Usage Strategy
 - **Parsing:** rules-first, call agent only when regex fails; log tokens + cost per call.
@@ -84,3 +96,74 @@
 - Mobile-friendly PWA UI.
 - Advanced analytics (monthly trends, forecast) and invoice attachment OCR.
 - Automate tagging feedback loop to retrain categorizer.
+
+## Phase 6: User Accounts & Access Control
+1. **Authentication & Onboarding**
+   - Integrate Django allauth (or social-auth) for Google OAuth so users can register/login with their Gmail account. Store Google profile info + refresh tokens securely per user. ✅ (Allauth login/signup + Google provider)
+   - Provide optional email/password signup for non-Google users (with email verification) and password reset flow. ✅ (custom templates, console email backend)
+
+2. **Data Ownership**
+   - Tie `EmailMessage`, `Transaction`, `Card`, `Category`, `CategoryRule`, `GmailCredential`, `GmailSyncState`, and future settings to a `User` foreign key. ✅
+   - Enforce per-user queryset filtering in views/APIs and admin (or add staff dashboards for multi-tenant support). ✅ (views/forms/commands scoped)
+
+3. **User Preferences & Settings**
+   - Model a `UserPreference` object storing per-user Gmail labels, default categories, LLM budgets, notification settings. ⚠️ *Next work item*
+   - Add UI for changing Gmail search query, quick month chips, default currency, and enabling/disabling LLM fallback per user. ⚠️ *Next work item*
+
+4. **Access Policies**
+   - Require login for transaction dashboard, allow superusers/admins to impersonate or switch tenants safely. ✅ (LoginRequired mixins; admin handles staff)
+   - Ensure management commands accept a `--user` or operate per-user queues when scheduling pipeline jobs. ✅ (`--user-email` flags)
+
+5. **Security & Compliance**
+   - Encrypt sensitive fields (refresh tokens, Gmail history IDs) at rest. ⚠️ *Planned* (currently plaintext JSON)
+   - Add audit logs for edits/reprocess actions; expose last updated/edited by in the UI. ⚠️ *Planned*
+
+### Upcoming Next Steps
+1. **User Preferences + Sensitive Data** (Phase 6.3 & 6.5)
+   - Implement a `UserPreference` model storing Gmail query overrides, LLM budgets, default currency, etc.
+   - Encrypt Gmail token JSON/history IDs (e.g., using `FernetField` or custom encryption) and add basic audit logging for critical actions (imports, edits, reprocesar).
+2. **Confidence Scoring & Review Queue** (Phase 2 pending)
+   - Add `parse_confidence`/`needs_review` fields and surface a “Revisar pendientes” table.
+3. **Deterministic Rule Feedback Loop** (Phase 3 enhancement)
+   - When a user changes a category, offer “convert to rule” suggestions and log manual overrides.
+4. **API + Deployment** (Phase 4 & 5)
+   - Build DRF endpoints (transactions, categories, import runs) and create Docker/Render configs + cron schedule for `run_pipeline`.
+
+## 8. Insightful Dashboard Plan
+- **Available data to leverage**
+  - `Transaction`: amount, currency, transaction_date, category, merchant, location, parse/category confidence, metadata, card linkage.
+  - `Category` & `CategoryRule`: semantic grouping, budgets/notes, and which rule triggered the category assignment.
+  - `Card`: label, bank, network, last4, active status for per-card spend trends.
+  - `LLMDecisionLog`: frequency/cost of AI fallbacks for parsing/categorization plus cache hits. 
+  - `EmailMessage` & `GmailSyncState`: ingestion timestamps, sync counts, and pipeline freshness.
+- **Dashboard objectives**
+  - Help users answer “Where is my money going?”, “Is this period trending higher or lower?”, “Which merchants/cards drive the change?”, and “What needs my action now?”.
+  - Mix retrospective insight (totals, trends) with proactive nudges (overspend alerts, pending reviews, sync health).
+- **Layout & modules**
+  1. **Hero KPIs**
+     - Total spend for selected period vs previous window (% change), avg daily spend, number of transactions, active cards used.
+     - Alert badges: uncategorized count, failed parses, LLM token cost vs budget, days since last sync.
+  2. **Spending Trend**
+     - Daily/weekly time-series stacked by category or card with 7-day moving average.
+     - Spike annotations linking to top merchants or large single transactions.
+  3. **Category Insights**
+     - Treemap or ranked bars showing share of wallet + delta vs prior month.
+     - Budget progress (Category metadata) with warning colors once >90% of limit.
+     - Drill-down table for a selected category listing merchants, avg ticket, recurring charges (std dev < threshold).
+  4. **Merchant & Location Signals**
+     - Top merchants by spend, new merchants this period, suspected subscriptions (3+ equal charges).
+     - Location heat map/table using `Transaction.location` + metadata geocodes when available.
+  5. **Card Health**
+     - Spend by card, average transaction size, idle cards (no transactions in N days), high-value alerts per card.
+     - Flag cards tied to failed parses or high manual overrides.
+  6. **Anomalies & Action Queue**
+     - Transactions with low parse/category confidence, missing category, or amount above user-set threshold.
+     - Quick actions (reprocess, recategorize, open Gmail via `gmail_message_url`) and ability to promote to a rule.
+  7. **Automation Insight**
+     - Breakdown of categorization source (rule vs LLM vs manual), manual overrides count, token cost trend.
+  8. **Sync & Data Freshness**
+     - `GmailSyncState` stats: last historyId, last_synced_at, messages fetched, retries; notify if sync is stale.
+- **Implementation notes**
+  - Add queryset helpers to scope aggregations per user/time window and reuse them across API + templates.
+  - Materialize frequently used aggregates (daily spend, category totals) via cached tables or Redis to keep dashboard <200ms.
+  - Expose dashboard data through dedicated API endpoints to power both Django templates now and richer clients later.

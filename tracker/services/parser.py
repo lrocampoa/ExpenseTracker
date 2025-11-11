@@ -254,7 +254,9 @@ class BacParser:
         return self._extract_first_match(body, CARD_LAST4_REGEXES, "card")
 
 
-def create_transaction_from_email(email: models.EmailMessage) -> Optional[models.Transaction]:
+def create_transaction_from_email(
+    email: models.EmailMessage, existing_transaction: Optional[models.Transaction] = None
+) -> Optional[models.Transaction]:
     parser = BacParser()
     parsed = parser.parse(email)
     if not parsed:
@@ -264,26 +266,63 @@ def create_transaction_from_email(email: models.EmailMessage) -> Optional[models
 
     card = models.Card.objects.filter(last4=parsed.card_last4).first()
 
-    transaction, _ = models.Transaction.objects.update_or_create(
-        email=email,
-        reference_id=parsed.reference_id,
-        defaults={
-            "amount": parsed.amount,
-            "currency_code": parsed.currency,
-            "card_last4": parsed.card_last4,
-            "merchant_name": parsed.merchant_name,
-            "transaction_date": parsed.transaction_date,
-            "parse_status": models.Transaction.ParseStatus.PARSED,
-        },
-    )
+    if existing_transaction:
+        transaction = existing_transaction
+        if parsed.reference_id:
+            models.Transaction.objects.filter(
+                email=email, reference_id=parsed.reference_id
+            ).exclude(pk=transaction.pk).delete()
+        transaction.reference_id = parsed.reference_id
+        transaction.amount = parsed.amount
+        transaction.currency_code = parsed.currency
+        transaction.card_last4 = parsed.card_last4
+        transaction.merchant_name = parsed.merchant_name
+        transaction.transaction_date = parsed.transaction_date
+        transaction.parse_status = models.Transaction.ParseStatus.PARSED
+        if card:
+            transaction.card = card
+        if hasattr(transaction, "user_id") and not transaction.user and getattr(email, "user", None):
+            transaction.user = email.user
+        transaction.save(
+            update_fields=[
+                "reference_id",
+                "amount",
+                "currency_code",
+                "card_last4",
+                "merchant_name",
+                "transaction_date",
+                "parse_status",
+                "card",
+                "user",
+                "updated_at",
+            ]
+        )
+    else:
+        transaction, _ = models.Transaction.objects.update_or_create(
+            email=email,
+            reference_id=parsed.reference_id,
+            defaults={
+                "amount": parsed.amount,
+                "currency_code": parsed.currency,
+                "card_last4": parsed.card_last4,
+                "merchant_name": parsed.merchant_name,
+                "transaction_date": parsed.transaction_date,
+                "parse_status": models.Transaction.ParseStatus.PARSED,
+                "user": getattr(email, "user", None),
+            },
+        )
 
-    if card and transaction.card_id != card.id:
-        transaction.card = card
-        transaction.save(update_fields=["card"])
+        if card and transaction.card_id != card.id:
+            transaction.card = card
+            transaction.save(update_fields=["card"])
 
     email.processed_at = timezone.now()
     email.parse_attempts += 1
     email.save(update_fields=["processed_at", "parse_attempts", "updated_at"])
+
+    if hasattr(transaction, "user_id") and not transaction.user and getattr(email, "user", None):
+        transaction.user = email.user
+        transaction.save(update_fields=["user", "updated_at"])
 
     categorize_transaction(transaction)
 

@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.db import models
 
 
@@ -13,6 +14,13 @@ class TimeStampedModel(models.Model):
 
 
 class Category(TimeStampedModel):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="categories",
+        null=True,
+        blank=True,
+    )
     code = models.SlugField(max_length=64, unique=True)
     name = models.CharField(max_length=128)
     description = models.TextField(blank=True)
@@ -26,12 +34,24 @@ class Category(TimeStampedModel):
 
 
 class Card(TimeStampedModel):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="cards",
+        null=True,
+        blank=True,
+    )
     label = models.CharField(max_length=128)
     last4 = models.CharField(max_length=4, unique=True)
     bank_name = models.CharField(max_length=128, blank=True)
     network = models.CharField(max_length=32, blank=True)
     is_active = models.BooleanField(default=True)
     notes = models.TextField(blank=True)
+    expense_account = models.CharField(
+        max_length=128,
+        blank=True,
+        help_text="Cuenta o categoría contable asociada a esta tarjeta.",
+    )
 
     class Meta(TimeStampedModel.Meta):
         ordering = ("label",)
@@ -42,6 +62,13 @@ class Card(TimeStampedModel):
 
 
 class EmailMessage(TimeStampedModel):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="emails",
+        null=True,
+        blank=True,
+    )
     gmail_message_id = models.CharField(max_length=128, unique=True)
     thread_id = models.CharField(max_length=128, blank=True)
     history_id = models.CharField(max_length=64, blank=True)
@@ -67,6 +94,13 @@ class Transaction(TimeStampedModel):
         PARSED = ("parsed", "Parsed")
         FAILED = ("failed", "Failed")
 
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="transactions",
+        null=True,
+        blank=True,
+    )
     email = models.ForeignKey(
         EmailMessage,
         on_delete=models.CASCADE,
@@ -134,6 +168,13 @@ class LLMDecisionLog(TimeStampedModel):
         CATEGORIZATION = ("categorization", "Categorization")
         OTHER = ("other", "Other")
 
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="llm_logs",
+        null=True,
+        blank=True,
+    )
     email = models.ForeignKey(
         EmailMessage,
         on_delete=models.CASCADE,
@@ -164,6 +205,13 @@ class LLMDecisionLog(TimeStampedModel):
 
 
 class GmailCredential(TimeStampedModel):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="gmail_credentials",
+        null=True,
+        blank=True,
+    )
     user_email = models.EmailField(unique=True)
     token_json = models.JSONField(default=dict)
     scopes = models.JSONField(default=list, blank=True)
@@ -178,12 +226,20 @@ class GmailCredential(TimeStampedModel):
 
 
 class GmailSyncState(TimeStampedModel):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="gmail_sync_states",
+        null=True,
+        blank=True,
+    )
     label = models.CharField(max_length=64, unique=True, default="primary")
     user_email = models.EmailField(blank=True)
     history_id = models.CharField(max_length=128, blank=True)
     last_synced_at = models.DateTimeField(null=True, blank=True)
     query = models.CharField(max_length=500, blank=True)
     fetched_messages = models.PositiveIntegerField(default=0)
+    retry_count = models.PositiveIntegerField(default=0)
 
     class Meta(TimeStampedModel.Meta):
         ordering = ("label",)
@@ -193,6 +249,13 @@ class GmailSyncState(TimeStampedModel):
 
 
 class CategoryRule(TimeStampedModel):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="category_rules",
+        null=True,
+        blank=True,
+    )
     class MatchField(models.TextChoices):
         MERCHANT = ("merchant", "Merchant Name")
         DESCRIPTION = ("description", "Description")

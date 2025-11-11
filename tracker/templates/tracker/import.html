@@ -1,0 +1,27 @@
+{% extends 'tracker/base.html' %}
+{% block title %}Importar movimientos{% endblock %}
+{% block content %}
+<section class="import-card">
+  <div class="import-header">
+    <h2>Importar movimientos desde Gmail</h2>
+    <p>Conecta tu cuenta y trae hasta los últimos 3 años de notificaciones.</p>
+  </div>
+  {% if not has_credentials %}
+    <div class="alert alert-warning">Necesitas conectar tu cuenta de Gmail antes de importar.</div>
+    <a class="google-btn" href="{% url 'tracker:gmail_connect' %}">
+      <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google">
+      Conectar Gmail
+    </a>
+  {% else %}
+    <form method="post" class="auth-form">
+      {% csrf_token %}
+      {{ form.non_field_errors }}
+      <label>
+        {{ form.years.label }}
+        {{ form.years }}
+      </label>
+      <button type="submit" class="btn btn-primary">Importar</button>
+    </form>
+  {% endif %}
+</section>
+{% endblock %}

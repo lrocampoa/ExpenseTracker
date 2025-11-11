@@ -8,6 +8,7 @@ import logging
 from typing import Optional
 
 from django.conf import settings
+from django.db.models import Q
 from django.utils import timezone
 
 from openai import OpenAI
@@ -26,7 +27,7 @@ def categorize_with_llm(trx: models.Transaction) -> Optional[CategorizationResul
         return None
 
     cache_key = _cache_key(trx)
-    cached = _load_cached_decision(cache_key)
+    cached = _load_cached_decision(cache_key, trx.user_id)
     if cached:
         category = cached["category"]
         metadata = cached["metadata"]
@@ -36,7 +37,7 @@ def categorize_with_llm(trx: models.Transaction) -> Optional[CategorizationResul
             source=f"llm-cache:{settings.OPENAI_MODEL}",
         )
 
-    if _daily_limit_exceeded():
+    if _daily_limit_exceeded(trx.user_id):
         logger.info("Skipping LLM categorization: daily cap reached.")
         return None
 
@@ -56,6 +57,7 @@ def categorize_with_llm(trx: models.Transaction) -> Optional[CategorizationResul
         tokens_completion=category["usage"].get("output_tokens"),
         metadata=metadata,
         cache_key=cache_key,
+        user=trx.user,
     )
     logger.debug("Stored LLM decision log %s", log.id)
 
@@ -78,13 +80,14 @@ def _cache_key(trx: models.Transaction) -> str:
     return hashlib.sha1(base.encode("utf-8")).hexdigest()
 
 
-def _load_cached_decision(cache_key: str):
-    log = (
-        models.LLMDecisionLog.objects.select_related("transaction")
-        .filter(decision_type=models.LLMDecisionLog.DecisionType.CATEGORIZATION, cache_key=cache_key)
-        .order_by("-created_at")
-        .first()
+def _load_cached_decision(cache_key: str, user_id: Optional[int]):
+    qs = models.LLMDecisionLog.objects.select_related("transaction").filter(
+        decision_type=models.LLMDecisionLog.DecisionType.CATEGORIZATION,
+        cache_key=cache_key,
     )
+    if user_id and hasattr(models.LLMDecisionLog, "user_id"):
+        qs = qs.filter(user_id=user_id)
+    log = qs.order_by("-created_at").first()
     if not log:
         return None
     metadata = log.metadata or {}
@@ -101,17 +104,23 @@ def _load_cached_decision(cache_key: str):
     }
 
 
-def _daily_limit_exceeded() -> bool:
+def _daily_limit_exceeded(user_id: Optional[int]) -> bool:
     today = timezone.now().date()
-    count = models.LLMDecisionLog.objects.filter(
+    qs = models.LLMDecisionLog.objects.filter(
         decision_type=models.LLMDecisionLog.DecisionType.CATEGORIZATION,
         created_at__date=today,
-    ).count()
+    )
+    if user_id and hasattr(models.LLMDecisionLog, "user_id"):
+        qs = qs.filter(user_id=user_id)
+    count = qs.count()
     return count >= settings.LLM_MAX_CALLS_PER_DAY
 
 
 def _call_openai_for_category(trx: models.Transaction):
-    categories = list(models.Category.objects.filter(is_active=True))
+    categories_qs = models.Category.objects.filter(is_active=True)
+    if trx.user_id and hasattr(models.Category, "user_id"):
+        categories_qs = categories_qs.filter(Q(user=trx.user) | Q(user__isnull=True))
+    categories = list(categories_qs)
     if not categories:
         logger.info("No categories available for LLM fallback.")
         return None

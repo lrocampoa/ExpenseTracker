@@ -9,8 +9,10 @@ from dataclasses import dataclass
 from datetime import datetime, timezone as dt_timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from uuid import uuid4
 
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured
 from django.db import transaction
 from django.utils import timezone
@@ -41,17 +43,18 @@ class SyncResult:
 class GmailCredentialManager:
     """Persist and refresh Gmail OAuth credentials."""
 
-    def __init__(self, user_email: Optional[str] = None, scopes: Optional[List[str]] = None):
+    def __init__(self, user_email: Optional[str] = None, scopes: Optional[List[str]] = None, user=None):
         self.user_email = user_email or settings.GMAIL_USER_EMAIL
         if not self.user_email:
             raise ImproperlyConfigured("GMAIL_USER_EMAIL is not configured and no email was provided.")
         self.scopes = scopes or settings.GMAIL_SCOPES
+        self.user = user or self._ensure_user()
 
     def _load_db_record(self) -> Optional[models.GmailCredential]:
-        try:
-            return models.GmailCredential.objects.get(user_email=self.user_email, is_active=True)
-        except models.GmailCredential.DoesNotExist:
-            return None
+        qs = models.GmailCredential.objects.filter(user_email=self.user_email, is_active=True)
+        if self.user and hasattr(models.GmailCredential, "user_id"):
+            qs = qs.filter(user=self.user)
+        return qs.first()
 
     def get_stored_credentials(self) -> Tuple[Optional[Credentials], Optional[models.GmailCredential]]:
         record = self._load_db_record()
@@ -74,6 +77,7 @@ class GmailCredentialManager:
             "scopes": self.scopes,
             "token_expiry": expiry_utc,
             "is_active": True,
+            "user": self.user,
         }
         record, _ = models.GmailCredential.objects.update_or_create(
             user_email=self.user_email,
@@ -111,6 +115,21 @@ class GmailCredentialManager:
     @staticmethod
     def build_service(credentials: Credentials):
         return build("gmail", "v1", credentials=credentials, cache_discovery=False)
+
+    def _ensure_user(self):
+        User = get_user_model()
+        user = User.objects.filter(email__iexact=self.user_email).first()
+        if user:
+            return user
+        username_field = getattr(User, "USERNAME_FIELD", "username")
+        username_value = self.user_email or f"gmail_{uuid4().hex[:6]}"
+        kwargs = {"email": self.user_email}
+        if username_field != "email":
+            kwargs[username_field] = username_value
+        else:
+            kwargs[username_field] = username_value
+        user = User.objects.create_user(password=None, **kwargs)
+        return user
 
 
 def _decode_body(data: Optional[str]) -> str:
@@ -163,12 +182,14 @@ class GmailIngestionService:
         query: str,
         label: str = "primary",
         max_messages: int = 50,
+        user=None,
     ):
         self.service = service
         self.user_email = user_email
         self.query = query
         self.label = label
         self.max_messages = max_messages
+        self.user = user
 
     def sync(self) -> SyncResult:
         result = SyncResult()
@@ -216,6 +237,11 @@ class GmailIngestionService:
                     break
         except HttpError as exc:  # pragma: no cover - network exception
             logger.exception("Gmail API error: %s", exc)
+            self._mark_sync_failure()
+            raise
+        except Exception:  # pragma: no cover - defensive catch
+            logger.exception("Unexpected Gmail sync failure")
+            self._mark_sync_failure()
             raise
         self._update_sync_state(result, latest_history)
         return result
@@ -227,16 +253,37 @@ class GmailIngestionService:
                 defaults={
                     "user_email": self.user_email,
                     "query": self.query,
+                    "user": self.user,
                 },
             )
             state.user_email = self.user_email
             state.query = self.query
+            if hasattr(state, "user_id"):
+                state.user = self.user
             if latest_history:
                 state.history_id = str(latest_history)
                 result.last_history_id = str(latest_history)
             state.last_synced_at = timezone.now()
-            state.fetched_messages += result.created
+            state.fetched_messages += result.fetched
+            state.retry_count = 0
             state.save()
+
+    def _mark_sync_failure(self) -> None:
+        with transaction.atomic():
+            state, _ = models.GmailSyncState.objects.select_for_update().get_or_create(
+                label=self.label,
+                defaults={
+                    "user_email": self.user_email,
+                    "query": self.query,
+                    "user": self.user,
+                },
+            )
+            state.user_email = self.user_email
+            state.query = self.query
+            if hasattr(state, "user_id"):
+                state.user = self.user
+            state.retry_count += 1
+            state.save(update_fields=["user_email", "query", "user", "retry_count", "updated_at"])
 
     def _store_message(self, message: Dict[str, Any]) -> bool:
         payload = message.get("payload", {})
@@ -257,6 +304,7 @@ class GmailIngestionService:
             "internal_date": internal_date,
             "raw_payload": payload,
             "raw_body": raw_body,
+            "user": self.user,
         }
         obj, created = models.EmailMessage.objects.update_or_create(
             gmail_message_id=message["id"],

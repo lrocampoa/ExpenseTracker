@@ -1,4 +1,4 @@
-{% load static %}
+{% load static formatting %}
 <!DOCTYPE html>
 <html lang="es">
   <head>
@@ -11,17 +11,47 @@
   <body>
     <header class="app-header">
       <div class="header-content">
-        <a class="brand" href="{% url 'tracker:transaction_list' %}">Mis Transacciones</a>
+        <a class="brand" href="{% url 'tracker:dashboard' %}">Expense Tracker</a>
         <nav>
+          {% if user.is_authenticated %}
+            <span class="user-pill">{{ user.email }}</span>
+            <a href="{% url 'account_logout' %}">Salir</a>
+          {% else %}
+            <a href="{% url 'account_login' %}">Entrar</a>
+          {% endif %}
           <a href="{% url 'admin:index' %}">Admin</a>
         </nav>
       </div>
     </header>
-    <main class="app-main">
-      {% block content %}{% endblock %}
-    </main>
+    <div class="app-shell">
+      {% if user.is_authenticated %}
+      <aside class="app-sidebar">
+        <nav>
+          <a class="sidebar-link" href="{% url 'tracker:dashboard' %}">📊 Tablero</a>
+          <a class="sidebar-link" href="{% url 'tracker:transaction_list' %}">🧾 Transacciones</a>
+          <a class="sidebar-link" href="{% url 'tracker:import' %}">⬇️ Importar movimientos</a>
+          <a class="sidebar-link" href="{% url 'tracker:cards' %}">💳 Tarjetas</a>
+          <a class="sidebar-link" href="#">🧾 Reglas y categorías</a>
+          <a class="sidebar-link" href="#">📬 Gmail y tokens</a>
+          <a class="sidebar-link" href="#">🤖 Agentes / LLM</a>
+          <a class="sidebar-link" href="#">⚙️ Preferencias</a>
+        </nav>
+      </aside>
+      {% endif %}
+      <main class="app-main">
+        {% if messages %}
+        <div class="flash-group">
+          {% for message in messages %}
+            <div class="flash flash-{{ message.tags|default:'info' }}">{{ message }}</div>
+          {% endfor %}
+        </div>
+        {% endif %}
+        {% block content %}{% endblock %}
+      </main>
+    </div>
     <footer class="app-footer">
       <p>Expense Tracker &middot; {% now 'Y' %}</p>
     </footer>
+    {% block extra_scripts %}{% endblock %}
   </body>
 </html>

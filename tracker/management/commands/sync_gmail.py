@@ -55,6 +55,7 @@ class Command(BaseCommand):
             query=query,
             label=label,
             max_messages=max_messages,
+            user=getattr(manager, "user", None),
         )
         result = ingestion.sync()
         self.stdout.write(

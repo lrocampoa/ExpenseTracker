@@ -8,6 +8,7 @@ from typing import Optional
 
 from django.conf import settings
 from django.db import transaction as db_transaction
+from django.db.models import Q
 
 from tracker import models
 
@@ -27,6 +28,8 @@ class RuleEngine:
             .filter(is_active=True)
             .order_by("priority", "-confidence", "name")
         )
+        if hasattr(models.CategoryRule, "user_id") and trx.user_id:
+            rules = rules.filter(Q(user=trx.user) | Q(user__isnull=True))
         for rule in rules:
             if self._matches_rule(rule, trx):
                 return CategorizationResult(

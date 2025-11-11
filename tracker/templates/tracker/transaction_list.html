@@ -1,0 +1,118 @@
+{% extends 'tracker/base.html' %}
+{% block title %}Transacciones{% endblock %}
+{% block content %}
+<section class="filter-card">
+  <form method="get" class="filter-form">
+    {% if quick_months %}
+    <div class="quick-months">
+      {% for month in quick_months %}
+        <a class="btn-chip" href="?{{ month.query }}">{{ month.label }}</a>
+      {% endfor %}
+    </div>
+    {% endif %}
+    <div class="filter-grid">
+      <div>
+        {{ filter_form.search.label_tag }}
+        {{ filter_form.search }}
+      </div>
+      <div>
+        {{ filter_form.category.label_tag }}
+        {{ filter_form.category }}
+      </div>
+      <div>
+        {{ filter_form.card_last4.label_tag }}
+        {{ filter_form.card_last4 }}
+      </div>
+      <div>
+        {{ filter_form.date_from.label_tag }}
+        {{ filter_form.date_from }}
+      </div>
+      <div>
+        {{ filter_form.date_to.label_tag }}
+        {{ filter_form.date_to }}
+      </div>
+      <div>
+        {{ filter_form.min_amount.label_tag }}
+        {{ filter_form.min_amount }}
+      </div>
+      <div>
+        {{ filter_form.max_amount.label_tag }}
+        {{ filter_form.max_amount }}
+      </div>
+    </div>
+    <div class="filter-actions">
+      <button type="submit" class="btn btn-primary">Aplicar filtros</button>
+      <a href="{% url 'tracker:transaction_list' %}" class="btn btn-secondary">Limpiar</a>
+    </div>
+  </form>
+</section>
+
+<section class="summary-cards">
+  <div class="summary-grid">
+    <div class="summary-card">
+      <h4>Resultados</h4>
+      <p>{{ result_count|format_number:0 }}</p>
+    </div>
+    {% for curr in currency_totals %}
+    <div class="summary-card">
+      <h4>Total {{ curr.currency_code }}</h4>
+      <p>{{ curr.total|format_number }}</p>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="transactions-card">
+  <div class="transactions-list">
+    {% for transaction in transactions %}
+    <article class="transaction-item">
+      <div class="transaction-info">
+        <h3>
+          <a href="{% url 'tracker:transaction_detail' transaction.pk %}">
+            {{ transaction.merchant_name|default:'(sin comercio)' }}
+          </a>
+        </h3>
+        <div class="actions-inline">
+          <a class="btn-link" href="{% url 'tracker:transaction_detail' transaction.pk %}?edit=1">Editar</a>
+        </div>
+        <div class="badges">
+          {% if transaction.category %}
+          <span class="badge">{{ transaction.category.name }}</span>
+          {% endif %}
+          {% if transaction.card_last4 %}
+          <span class="badge badge-muted">**** {{ transaction.card_last4 }}</span>
+          {% endif %}
+          {% if transaction.transaction_date %}
+          <span class="badge badge-muted">{{ transaction.transaction_date|date:'d M Y H:i' }}</span>
+          {% endif %}
+        </div>
+        <p class="muted">{{ transaction.description|default:'Sin descripción' }}</p>
+        {% if transaction.email %}
+        <details class="email-preview">
+          <summary>Ver mensaje original</summary>
+          <div class="email-body">{{ transaction.email.raw_body|safe }}</div>
+        </details>
+        {% endif %}
+      </div>
+      <div class="transaction-amount">
+        <strong>{{ transaction.amount|default:0|format_number }} {{ transaction.currency_code }}</strong>
+        <p class="muted">Ref: {{ transaction.reference_id|default:'-' }}</p>
+      </div>
+    </article>
+    {% empty %}
+    <p>No hay transacciones para los filtros seleccionados.</p>
+    {% endfor %}
+  </div>
+  {% if is_paginated %}
+  <div class="pagination">
+    {% if page_obj.has_previous %}
+      <a href="?page={{ page_obj.previous_page_number }}{{ querystring }}">Anterior</a>
+    {% endif %}
+    <span class="active">Página {{ page_obj.number }} / {{ page_obj.paginator.num_pages }}</span>
+    {% if page_obj.has_next %}
+      <a href="?page={{ page_obj.next_page_number }}{{ querystring }}">Siguiente</a>
+    {% endif %}
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

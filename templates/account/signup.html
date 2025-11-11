@@ -1,0 +1,26 @@
+{% extends 'tracker/base.html' %}
+{% load socialaccount %}
+{% block title %}Crear cuenta{% endblock %}
+{% block content %}
+<section class="auth-card">
+  <h2>Crear cuenta</h2>
+  <form method="post" class="auth-form">
+    {% csrf_token %}
+    {{ form.non_field_errors }}
+    {% for field in form %}
+      <label>
+        {{ field.label }}
+        {{ field }}
+        {% if field.errors %}<span class="error">{{ field.errors|join:', ' }}</span>{% endif %}
+      </label>
+    {% endfor %}
+    <button type="submit" class="btn btn-primary">Registrarme</button>
+  </form>
+  <div class="divider">o</div>
+  <a class="google-btn" href="{% provider_login_url 'google' %}">
+    <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google">
+    Registrarme con Google
+  </a>
+  <p class="muted">¿Ya tienes cuenta? <a href="{% url 'account_login' %}">Inicia sesión</a></p>
+</section>
+{% endblock %}

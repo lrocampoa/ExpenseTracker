@@ -1,0 +1,103 @@
+{% extends 'tracker/base.html' %}
+{% block title %}Detalle de transacción{% endblock %}
+{% block content %}
+<div class="detail-actions">
+  <a href="{% url 'tracker:transaction_list' %}" class="btn btn-secondary">&larr; Volver</a>
+  {% if show_form %}
+    <a href="{% url 'tracker:transaction_detail' object.pk %}" class="btn btn-secondary">Cancelar</a>
+  {% else %}
+    <a href="{% url 'tracker:transaction_detail' object.pk %}?edit=1" class="btn btn-primary">Editar</a>
+  {% endif %}
+  {% if object.email %}
+  <form method="post" class="inline-form">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="reparse">
+    <button type="submit" class="btn btn-secondary">Reprocesar</button>
+  </form>
+  {% endif %}
+</div>
+<section class="transaction-detail-card">
+  <h2>{{ object.merchant_name|default:'Transacción' }}</h2>
+  <p class="muted">{{ object.transaction_date|date:'d \d\e F \d\e Y H:i' }}</p>
+  <form method="post" class="detail-grid edit-grid">
+    {% csrf_token %}
+    {{ form.non_field_errors }}
+    <div>
+      <h4>Monto</h4>
+      {% if show_form %}
+        {{ form.amount }}
+        <small>{{ form.currency_code }}</small>
+      {% else %}
+        <p>{{ object.amount|default:0|format_number }} {{ object.currency_code }}</p>
+      {% endif %}
+    </div>
+    <div>
+      <h4>Categoría</h4>
+      {% if show_form %}
+        {{ form.category }}
+      {% else %}
+        <p>{{ object.category.name|default:'Sin categoría' }}</p>
+      {% endif %}
+    </div>
+    <div>
+      <h4>Tarjeta</h4>
+      <p>{% if object.card %}{{ object.card.label }} (**** {{ object.card.last4 }}){% else %}**** {{ object.card_last4|default:'----' }}{% endif %}</p>
+    </div>
+    <div>
+      <h4>Referencia</h4>
+      <p>{{ object.reference_id|default:'-' }}</p>
+    </div>
+    <div>
+      <h4>Origen del correo</h4>
+      <p><a href="{% url 'admin:tracker_emailmessage_change' object.email_id %}">Ver en EmailMessage</a> &middot;
+      {% if object.gmail_message_url %}
+        <a href="{{ object.gmail_message_url }}" target="_blank" rel="noopener">Abrir en Gmail</a>
+      {% else %}
+        No disponible
+      {% endif %}
+      </p>
+    </div>
+    <div>
+      <h4>Descripción</h4>
+      {% if show_form %}
+        {{ form.description }}
+      {% else %}
+        <p>{{ object.description|default:'Sin descripción' }}</p>
+      {% endif %}
+    </div>
+    <div>
+      <h4>Nombre del comercio</h4>
+      {% if show_form %}
+        {{ form.merchant_name }}
+      {% else %}
+        <p>{{ object.merchant_name|default:'(sin comercio)' }}</p>
+      {% endif %}
+    </div>
+    <div>
+      <h4>Fecha</h4>
+      {% if show_form %}
+        {{ form.transaction_date }}
+      {% else %}
+        <p>{{ object.transaction_date|date:'d/m/Y H:i' }}</p>
+      {% endif %}
+    </div>
+    {% if show_form %}
+    <div class="detail-actions" style="grid-column: 1 / -1;">
+      <button type="submit" class="btn btn-primary">Guardar</button>
+      <a href="{% url 'tracker:transaction_detail' object.pk %}" class="btn btn-secondary">Cancelar</a>
+    </div>
+    {% endif %}
+  </form>
+  <section class="email-section">
+    <h3>Mensaje original</h3>
+    {% if object.email %}
+      <details open>
+        <summary>{{ object.email.subject|default:'Correo' }}</summary>
+        <div class="email-body">{{ object.email.raw_body|safe }}</div>
+      </details>
+    {% else %}
+      <p>No hay correo asociado.</p>
+    {% endif %}
+  </section>
+</section>
+{% endblock %}

@@ -1,0 +1,394 @@
+{% extends "tracker/base.html" %}
+
+{% block title %}Tablero{% endblock %}
+
+{% block content %}
+<div class="dashboard-header">
+  <div>
+    <p class="eyebrow">Visión general · {{ period.label }}</p>
+    <h1>Tablero financiero</h1>
+    <p class="muted">
+      {{ period.start|date:"M d, Y" }} &mdash; {{ period.end|date:"M d, Y" }}
+    </p>
+  </div>
+  <div class="range-chips">
+    {% for option in period.available_ranges %}
+      <a class="chip {% if option.active %}chip-active{% endif %}" href="{{ option.url }}">{{ option.label }}</a>
+    {% endfor %}
+  </div>
+</div>
+
+{% if alerts %}
+  <div class="alert-badges">
+    {% for alert in alerts %}
+      <span class="alert-badge alert-{{ alert.severity }}">{{ alert.label }}: <strong>{{ alert.value }}</strong></span>
+    {% endfor %}
+  </div>
+{% endif %}
+
+<section class="kpi-grid">
+  <div class="kpi-card">
+    <p class="kpi-label">Gasto del periodo</p>
+    <p class="kpi-value">
+      {{ hero.total_spend|format_number }} {{ hero.currency_totals.0.currency_code|default:"CRC" }}
+    </p>
+    {% if hero.pct_change %}
+      <span class="kpi-delta {% if hero.pct_change > 0 %}delta-up{% else %}delta-down{% endif %}">
+        {% if hero.pct_change > 0 %}+{% endif %}{{ hero.pct_change|format_number:1 }}% vs periodo anterior
+      </span>
+    {% else %}
+      <span class="kpi-muted">Sin histórico previo</span>
+    {% endif %}
+    <ul class="currency-breakdown">
+      {% for row in hero.currency_totals %}
+        <li>{{ row.currency_code }} · {{ row.total|format_number }}</li>
+      {% empty %}
+        <li>No hay montos registrados</li>
+      {% endfor %}
+    </ul>
+  </div>
+  <div class="kpi-card">
+    <p class="kpi-label">Promedio diario</p>
+    <p class="kpi-value">{{ hero.avg_daily|format_number }} {{ hero.currency_totals.0.currency_code|default:"CRC" }}</p>
+    <span class="kpi-muted">Basado en {{ period.days }} días</span>
+  </div>
+  <div class="kpi-card">
+    <p class="kpi-label">Transacciones</p>
+    <p class="kpi-value">{{ hero.transaction_count|format_number:0 }}</p>
+    <span class="kpi-muted">Ticket promedio: {{ hero.avg_ticket|format_number }} {{ hero.currency_totals.0.currency_code|default:"CRC" }}</span>
+  </div>
+  <div class="kpi-card">
+    <p class="kpi-label">Tarjetas activas</p>
+    <p class="kpi-value">{{ hero.active_cards|format_number:0 }}</p>
+    <span class="kpi-muted">Tarjetas con gasto en el periodo</span>
+  </div>
+</section>
+
+<section class="section-card">
+  <div class="section-header">
+    <div>
+      <h2>Tendencia de gasto</h2>
+      <p class="muted">Series diarias por moneda</p>
+    </div>
+  </div>
+  <div class="trend-table">
+    <div class="trend-row trend-head">
+      <span>Día</span>
+      <span>Transacciones</span>
+      <span>Total</span>
+    </div>
+    {% for row in spending_trend %}
+      <div class="trend-row">
+        <span>{{ row.day|date:"d M" }} · {{ row.currency_code }}</span>
+        <span>{{ row.count|format_number:0 }}</span>
+        <span>{{ row.total|format_number }}</span>
+      </div>
+    {% empty %}
+      <p class="muted">No hay datos en el rango seleccionado.</p>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="section-card">
+  <div class="section-header">
+    <div>
+      <h2>Gasto mensual</h2>
+      <p class="muted">Suma por mes (últimos {{ monthly_chart.labels|length }} meses)</p>
+    </div>
+  </div>
+  {% if monthly_chart.has_data %}
+    <div class="chart-insights">
+      <div>
+        <p class="muted">Último mes · {{ monthly_chart.insights.last_label }}</p>
+        <p class="insight-value">{{ monthly_chart.insights.last_value|format_number }}</p>
+      </div>
+      <div>
+        <p class="muted">Vs mes anterior</p>
+        {% if monthly_chart.insights.mom_change %}
+          <p class="insight-value {% if monthly_chart.insights.mom_change > 0 %}delta-up{% else %}delta-down{% endif %}">
+            {% if monthly_chart.insights.mom_change > 0 %}+{% endif %}{{ monthly_chart.insights.mom_change|format_number:1 }}%
+          </p>
+        {% else %}
+          <p class="insight-value muted">n/a</p>
+        {% endif %}
+      </div>
+      <div>
+        <p class="muted">Promedio periodo</p>
+        <p class="insight-value">{{ monthly_chart.insights.avg_value|format_number }}</p>
+      </div>
+      <div>
+        <p class="muted">Mes pico</p>
+        <p class="insight-value">
+          {{ monthly_chart.insights.best_label }} · {{ monthly_chart.insights.best_value|format_number }}
+        </p>
+      </div>
+    </div>
+    <div class="line-chart">
+      <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+        {% for y in monthly_chart.grid_lines %}
+          <line class="chart-grid" x1="0" y1="{{ y }}" x2="100" y2="{{ y }}" />
+        {% endfor %}
+        {% if monthly_chart.area_points %}
+          <polygon class="chart-area" points="{{ monthly_chart.area_points }}" />
+        {% endif %}
+        <polyline points="{{ monthly_chart.points }}" />
+        {% for point in monthly_chart.markers %}
+          <circle cx="{{ point.x }}" cy="{{ point.y }}" r="1.5" />
+        {% endfor %}
+      </svg>
+    </div>
+    <div class="chart-labels">
+      {% for point in monthly_chart.markers %}
+        <span>
+          <strong>{{ point.label }}</strong>
+          <small>{{ point.value|format_number }}</small>
+        </span>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p class="muted">Aún no hay datos suficientes para graficar.</p>
+  {% endif %}
+</section>
+
+<section class="section-grid">
+  <div class="section-card">
+    <div class="section-header">
+      <h2>Insight por categoría</h2>
+      <p class="muted">Participación y variación vs periodo previo</p>
+    </div>
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Categoría</th>
+          <th>Gasto</th>
+          <th>Participación</th>
+          <th>Δ periodo anterior</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in category_insights %}
+          <tr>
+            <td>{{ item.label }}</td>
+            <td>{{ item.total|format_number }}</td>
+            <td>{{ item.share|format_number:1 }}%</td>
+            <td>
+              {% if item.delta_pct %}
+                <span class="{% if item.delta_pct > 0 %}delta-up{% else %}delta-down{% endif %}">
+                  {% if item.delta_pct > 0 %}+{% endif %}{{ item.delta_pct|format_number:1 }}%
+                </span>
+              {% else %}
+                <span class="kpi-muted">n/a</span>
+              {% endif %}
+            </td>
+          </tr>
+        {% empty %}
+          <tr>
+            <td colspan="4" class="muted">Aún no hay categorías para este rango.</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="section-card">
+    <div class="section-header">
+      <h2>Señales de comercio</h2>
+      <p class="muted">Top comercios y posibles suscripciones</p>
+    </div>
+    <div class="stacked-block">
+      <div>
+        <h3>Top comercios</h3>
+        <ul class="simple-list">
+          {% for merchant in merchant_signals.top_merchants %}
+            <li>
+              <div>
+                <strong>{{ merchant.merchant_name }}</strong>
+                <p class="muted">{{ merchant.count|format_number:0 }} transacciones</p>
+              </div>
+              <span>{{ merchant.total|format_number }}</span>
+            </li>
+          {% empty %}
+            <li class="muted">Sin comercios destacados.</li>
+          {% endfor %}
+        </ul>
+      </div>
+      <div>
+        <h3>Nuevos comercios</h3>
+        <p class="headline">{{ merchant_signals.new_merchants|format_number:0 }}</p>
+      </div>
+      <div>
+        <h3>Posibles suscripciones</h3>
+        <ul class="simple-list">
+          {% for sub in merchant_signals.suspected_subscriptions %}
+            <li>
+              <div>
+                <strong>{{ sub.merchant_name }}</strong>
+                <p class="muted">{{ sub.count|format_number:0 }} cargos ~ {{ sub.amount|format_number }}</p>
+              </div>
+            </li>
+          {% empty %}
+            <li class="muted">Sin patrones repetidos significativos.</li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section-grid">
+  <div class="section-card">
+    <div class="section-header">
+      <h2>Salud de tarjetas</h2>
+      <p class="muted">Uso por tarjeta y tarjetas inactivas</p>
+    </div>
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Tarjeta</th>
+          <th>Transacciones</th>
+          <th>Total</th>
+          <th>Ticket promedio</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for card in card_health.card_stats %}
+          <tr>
+            <td>{{ card.card__label }} · ••••{{ card.card__last4 }}</td>
+            <td>{{ card.count|format_number:0 }}</td>
+            <td>{{ card.total|format_number }}</td>
+            <td>{{ card.avg|format_number }}</td>
+          </tr>
+        {% empty %}
+          <tr>
+            <td colspan="4" class="muted">No hay tarjetas con movimiento en este periodo.</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <div class="idle-cards">
+      <h3>Tarjetas sin uso reciente</h3>
+      <ul>
+        {% for card in card_health.idle_cards %}
+          <li>{{ card.label }} · ••••{{ card.last4 }} {% if card.last_tx %}<span class="muted">(último uso {{ card.last_tx|date:"d M" }})</span>{% endif %}</li>
+        {% empty %}
+          <li class="muted">Todas las tarjetas tuvieron uso reciente.</li>
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+  <div class="section-card">
+    <div class="section-header">
+      <h2>Pendientes y anomalías</h2>
+      <p class="muted">Transacciones que requieren atención</p>
+    </div>
+    <ul class="simple-list attention-list">
+      {% for tx in action_queue %}
+        <li>
+          <div>
+            <strong>{{ tx.merchant_name|default:"Sin comercio" }}</strong>
+            <p class="muted">
+              {{ tx.transaction_date|date:"d M H:i" }} · {{ tx.category|default:"Sin categoría" }} · {{ tx.card|default:"Sin tarjeta" }}
+            </p>
+          </div>
+          <div class="attention-amount">
+            <span>{{ tx.amount|format_number }} {{ tx.currency_code }}</span>
+            <a class="mini-link" href="{% url 'tracker:transaction_detail' tx.pk %}">Ver</a>
+          </div>
+        </li>
+      {% empty %}
+        <li class="muted">Todo se ve bien por ahora 🎉</li>
+      {% endfor %}
+    </ul>
+  </div>
+</section>
+
+<section class="section-grid">
+  <div class="section-card">
+    <div class="section-header">
+      <h2>Automatización</h2>
+      <p class="muted">Fuentes de categorización</p>
+    </div>
+    <ul class="simple-list">
+      {% for row in automation_insight %}
+        <li>
+          <span>{{ row.category_source|default:"Desconocido" }}</span>
+          <strong>{{ row.count }}</strong>
+        </li>
+      {% empty %}
+        <li class="muted">Aún no hay registros.</li>
+      {% endfor %}
+    </ul>
+  </div>
+  <div class="section-card">
+    <div class="section-header">
+      <h2>Uso de LLM</h2>
+      <p class="muted">Costos y decisiones</p>
+    </div>
+    <div class="llm-summary">
+      <p><strong>Costo</strong> {{ llm_usage.summary.total_cost|default_if_none:0|format_number }}</p>
+      <p><strong>Tokens prompt</strong> {{ llm_usage.summary.tokens_prompt|default_if_none:0|format_number:0 }}</p>
+      <p><strong>Tokens completion</strong> {{ llm_usage.summary.tokens_completion|default_if_none:0|format_number:0 }}</p>
+    </div>
+    <ul class="simple-list">
+      {% for row in llm_usage.decision_breakdown %}
+        <li>
+          <span>{{ row.decision_type }}</span>
+          <strong>{{ row.count }}</strong>
+        </li>
+      {% empty %}
+        <li class="muted">Sin invocaciones en el periodo.</li>
+      {% endfor %}
+    </ul>
+  </div>
+  <div class="section-card">
+    <div class="section-header">
+      <h2>Sincronización & data freshness</h2>
+      <p class="muted">Estado de los jobs de Gmail</p>
+    </div>
+    <p class="muted">Correos pendientes por procesar: <strong>{{ sync_health.pending_emails|format_number:0 }}</strong></p>
+    {% if sync_health.stale_labels %}
+      <div class="alert-badge alert-warn">
+        Sincronización atrasada en {{ sync_health.stale_labels|join:", " }} (>{{ sync_health.stale_minutes }} min).
+      </div>
+    {% endif %}
+    <ul class="simple-list sync-health-list">
+      {% for state in sync_health.states %}
+        <li class="{% if state.is_stale %}sync-health-row-stale{% endif %}">
+          <div class="sync-health-head">
+            <strong>{{ state.label }}</strong>
+            {% if state.is_stale %}
+              <span class="status-pill status-pill-warn">Atrasado</span>
+            {% else %}
+              <span class="status-pill status-pill-ok">Ok</span>
+            {% endif %}
+          </div>
+          <p class="muted">
+            Último historyId: {{ state.history_id|default:"n/a" }} · Query: {{ state.query|default:"(por defecto)" }}
+          </p>
+          <div class="sync-health-meta">
+            <div class="sync-health-stat">
+              <small>Última sync</small>
+              <span>
+                {% if state.last_synced_at %}
+                  {{ state.last_synced_at|date:"d M H:i" }}
+                {% else %}
+                  nunca
+                {% endif %}
+              </span>
+            </div>
+            <div class="sync-health-stat">
+              <small>Mensajes importados</small>
+              <span>{{ state.fetched_messages|format_number:0 }}</span>
+            </div>
+            <div class="sync-health-stat">
+              <small>Reintentos</small>
+              <span>{{ state.retry_count|format_number:0 }}</span>
+            </div>
+          </div>
+        </li>
+      {% empty %}
+        <li class="muted">No se ha configurado la sincronización.</li>
+      {% endfor %}
+    </ul>
+  </div>
+</section>
+{% endblock %}

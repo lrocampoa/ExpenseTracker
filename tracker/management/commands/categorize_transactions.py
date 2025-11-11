@@ -24,11 +24,18 @@ class Command(BaseCommand):
             action="store_true",
             help="Allow LLM fallback even if disabled in settings.",
         )
+        parser.add_argument(
+            "--user-email",
+            help="Categorize solo transacciones de este usuario.",
+        )
 
     def handle(self, *args, **options):
         qs = models.Transaction.objects.order_by("-transaction_date", "-created_at")
         if not options["all"]:
             qs = qs.filter(category__isnull=True)
+        user_email = options.get("user_email")
+        if user_email and hasattr(models.Transaction, "user_id"):
+            qs = qs.filter(user__email__iexact=user_email)
         limit = options["limit"]
         processed = 0
         categorized = 0

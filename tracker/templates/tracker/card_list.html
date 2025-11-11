@@ -1,0 +1,77 @@
+{% extends 'tracker/base.html' %}
+{% load static %}
+{% block title %}Tarjetas{% endblock %}
+{% block content %}
+<section class="card-management">
+  <div class="card-management__header">
+    <h2>Tarjetas</h2>
+    <p>Detectamos todas las tarjetas usadas en tus transacciones. Etiquétalas y asigna la cuenta contable que prefieras.</p>
+  </div>
+  {% if card_rows %}
+  <div class="card-management__list card-management__list--full">
+    {% for row in card_rows %}
+    <article class="card-tile">
+      <div class="card-tile__row">
+        <strong>**** {{ row.last4 }}</strong>
+        {% if row.card %}
+        <span class="status {{ row.card.is_active|yesno:'active,inactive' }}">{{ row.card.is_active|yesno:'Activa,Inactiva' }}</span>
+        {% else %}
+        <span class="status pending">Sin etiqueta</span>
+        {% endif %}
+      </div>
+      {% if row.card and row.card.bank_name %}
+      <p class="muted">{{ row.card.bank_name }}</p>
+      {% endif %}
+      <form method="post" class="card-inline-form">
+        {% csrf_token %}
+        {{ row.form.non_field_errors }}
+        {{ row.form.card_id }}{{ row.form.last4 }}
+        <div class="card-inline-grid">
+          <label>
+            {{ row.form.label.label }}
+            {{ row.form.label }}
+            {% if row.form.label.errors %}<span class="error">{{ row.form.label.errors|join:', ' }}</span>{% endif %}
+          </label>
+          <div class="expense-picker" data-expense-picker>
+            <label>
+              {{ row.form.expense_account.label }}
+              {{ row.form.expense_account }}
+            </label>
+            <button type="button" class="btn-link expense-trigger" data-expense-trigger>+ Nueva cuenta</button>
+            {% if row.form.expense_account.errors %}<span class="error">{{ row.form.expense_account.errors|join:', ' }}</span>{% endif %}
+          </div>
+        </div>
+        {% with row.form.expense_account.value|default_if_none:'' as expense_value %}
+        {% with row.form.new_expense_account.value|default_if_none:'' as new_value %}
+        <div class="expense-modal {% if expense_value == '__new__' or new_value %}is-open{% endif %}" data-expense-modal data-initial-open="{% if expense_value == '__new__' or new_value %}1{% else %}0{% endif %}">
+          <div class="expense-modal__backdrop" data-expense-cancel></div>
+          <div class="expense-modal__card">
+            <p class="muted small">Ingresa el nombre de la nueva cuenta para agrupar tus gastos.</p>
+            {{ row.form.new_expense_account }}
+            {% if row.form.new_expense_account.errors %}<span class="error">{{ row.form.new_expense_account.errors|join:', ' }}</span>{% endif %}
+            <div class="actions-inline">
+              <button type="button" class="btn btn-secondary" data-expense-cancel>Cancelar</button>
+              <button type="button" class="btn btn-primary" data-expense-confirm>Usar cuenta</button>
+            </div>
+          </div>
+        </div>
+        {% endwith %}
+        {% endwith %}
+        <div class="actions-inline">
+          <button type="submit" class="btn btn-primary">Guardar</button>
+          {% if row.card %}
+          <a class="btn-link" href="{% url 'tracker:card_edit' row.card.pk %}">Editar detalles</a>
+          {% endif %}
+        </div>
+      </form>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="muted">Aún no hay tarjetas detectadas. Importa tus correos para comenzar.</p>
+  {% endif %}
+</section>
+{% endblock %}
+{% block extra_scripts %}
+<script src="{% static 'tracker/cards.js' %}"></script>
+{% endblock %}

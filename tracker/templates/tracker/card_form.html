@@ -1,0 +1,22 @@
+{% extends 'tracker/base.html' %}
+{% block title %}Editar tarjeta{% endblock %}
+{% block content %}
+<section class="card-management">
+  <div class="detail-actions">
+    <a href="{% url 'tracker:cards' %}" class="btn btn-secondary">&larr; Volver</a>
+  </div>
+  <h2>Editar tarjeta</h2>
+  <form method="post" class="auth-form">
+    {% csrf_token %}
+    {{ form.non_field_errors }}
+    {% for field in form %}
+    <label>
+      {{ field.label }}
+      {{ field }}
+      {% if field.errors %}<span class="error">{{ field.errors|join:', ' }}</span>{% endif %}
+    </label>
+    {% endfor %}
+    <button type="submit" class="btn btn-primary">Guardar cambios</button>
+  </form>
+</section>
+{% endblock %}

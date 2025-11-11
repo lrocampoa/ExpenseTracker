@@ -52,6 +52,23 @@ class ParserTests(TestCase):
         self.assertEqual(transaction.currency_code, "CRC")
         self.assertEqual(transaction.merchant_name, "BO BAR MIXOLOGY")
 
+    def test_parse_usd_template(self):
+        email = models.EmailMessage.objects.create(
+            gmail_message_id="usd",
+            subject="Notificación de transacción",
+            raw_body=load_fixture("bac_notificacion_credit_card_usd.html"),
+            internal_date=self.now,
+        )
+
+        transaction = create_transaction_from_email(email)
+
+        self.assertIsNotNone(transaction)
+        self.assertEqual(transaction.reference_id, "AUTH999")
+        self.assertEqual(transaction.card_last4, "8888")
+        self.assertEqual(transaction.amount, Decimal("45.60"))
+        self.assertEqual(transaction.currency_code, "USD")
+        self.assertEqual(transaction.merchant_name, "AMAZON DIGITAL")
+
     def test_parse_sinpe_email(self):
         email = models.EmailMessage.objects.create(
             gmail_message_id="sinpe",

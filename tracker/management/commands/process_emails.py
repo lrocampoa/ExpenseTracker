@@ -19,6 +19,10 @@ class Command(BaseCommand):
             action="store_true",
             help="Process all emails regardless of parsed state.",
         )
+        parser_arg.add_argument(
+            "--user-email",
+            help="Process emails belonging to this user (by email).",
+        )
 
     def handle(self, *args, **options):
         limit = options["limit"]
@@ -26,6 +30,9 @@ class Command(BaseCommand):
         queryset = models.EmailMessage.objects.order_by("-internal_date")
         if not process_all:
             queryset = queryset.filter(processed_at__isnull=True)
+        user_email = options.get("user_email")
+        if user_email and hasattr(models.EmailMessage, "user_id"):
+            queryset = queryset.filter(user__email__iexact=user_email)
         processed = 0
         created = 0
         for email in queryset[:limit]:
