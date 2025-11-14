@@ -36,6 +36,7 @@ if not ALLOWED_HOSTS:
 
 csrf_origins = os.getenv("DJANGO_CSRF_TRUSTED_ORIGINS", "")
 CSRF_TRUSTED_ORIGINS = [origin.strip() for origin in csrf_origins.split(",") if origin.strip()]
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 
 # Application definition
@@ -216,6 +217,7 @@ EMAIL_BACKEND = os.getenv(
     "EMAIL_BACKEND",
     "django.core.mail.backends.console.EmailBackend",
 )
+ACCOUNT_DEFAULT_HTTP_PROTOCOL = "https"
 
 GOOGLE_OAUTH_REDIRECT_URI = os.getenv(
     "GOOGLE_OAUTH_REDIRECT_URI",
