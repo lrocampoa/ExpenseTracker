@@ -5,15 +5,32 @@ from django.utils.html import format_html
 from . import models
 
 
+@admin.register(models.SpendingGroup)
+class SpendingGroupAdmin(admin.ModelAdmin):
+    list_display = ("name", "group_type", "is_active", "created_by", "updated_at")
+    list_filter = ("group_type", "is_active")
+    search_fields = ("name", "slug")
+    prepopulated_fields = {"slug": ("name",)}
+    autocomplete_fields = ("created_by",)
+
+
+@admin.register(models.GroupMembership)
+class GroupMembershipAdmin(admin.ModelAdmin):
+    list_display = ("group", "user", "role", "status", "budget_share_percent", "updated_at")
+    list_filter = ("role", "status")
+    search_fields = ("group__name", "user__email")
+    autocomplete_fields = ("group", "user", "invited_by")
+
+
 @admin.register(models.Category)
 class CategoryAdmin(admin.ModelAdmin):
-    list_display = ("name", "code", "budget_limit", "is_active", "updated_at")
-    list_filter = ("is_active",)
+    list_display = ("name", "code", "budget_limit", "is_active", "group", "user", "updated_at")
+    list_filter = ("is_active", "group")
     search_fields = ("name", "code")
     ordering = ("name",)
 
     def save_model(self, request, obj, form, change):
-        if hasattr(obj, "user") and not obj.user:
+        if hasattr(obj, "user") and not obj.user and not obj.group_id:
             obj.user = request.user
         super().save_model(request, obj, form, change)
 
@@ -49,9 +66,11 @@ class TransactionAdmin(admin.ModelAdmin):
         "category",
         "subcategory",
         "category_source",
+        "needs_review",
+        "group",
         "email_message_link",
     )
-    list_filter = ("parse_status", "currency_code", "category", "subcategory")
+    list_filter = ("parse_status", "currency_code", "category", "subcategory", "needs_review", "group")
     search_fields = ("merchant_name", "reference_id", "card_last4")
     autocomplete_fields = ("email", "card", "category", "subcategory")
     readonly_fields = ("email_message_link",)
@@ -187,8 +206,8 @@ class TransactionCorrectionAdmin(admin.ModelAdmin):
 
 @admin.register(models.Subcategory)
 class SubcategoryAdmin(admin.ModelAdmin):
-    list_display = ("name", "category", "budget_limit", "updated_at")
-    list_filter = ("category",)
+    list_display = ("name", "category", "group", "budget_limit", "updated_at")
+    list_filter = ("category", "group")
     search_fields = ("name", "code", "category__name")
 
 
@@ -197,7 +216,14 @@ class RuleSuggestionAdmin(admin.ModelAdmin):
     list_display = ("merchant_name", "category", "card_last4", "status", "user", "created_at")
     list_filter = ("status", "category")
     search_fields = ("merchant_name", "category__name", "user__email")
-    autocomplete_fields = ("category", "transaction", "correction", "user")
+
+
+@admin.register(models.CategorySuggestion)
+class CategorySuggestionAdmin(admin.ModelAdmin):
+    list_display = ("name", "suggestion_type", "group", "status", "requested_by", "reviewed_by", "updated_at")
+    list_filter = ("suggestion_type", "status", "group")
+    search_fields = ("name", "group__name", "requested_by__email")
+    autocomplete_fields = ("group", "requested_by", "parent_category", "reviewed_by")
 
 
 @admin.register(models.ExpenseAccount)

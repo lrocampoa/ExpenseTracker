@@ -3,6 +3,7 @@ from typing import Optional
 from django.conf import settings
 from django.db import models
 from django.db.models import Q
+from django.utils import timezone
 
 
 class TimeStampedModel(models.Model):
@@ -16,9 +17,88 @@ class TimeStampedModel(models.Model):
         ordering = ("-created_at",)
 
 
+class SpendingGroup(TimeStampedModel):
+    class GroupType(models.TextChoices):
+        FAMILY = ("family", "Family")
+        ROOMMATES = ("roommates", "Roommates")
+        BUSINESS = ("business", "Business/Partners")
+        OTHER = ("other", "Other")
+
+    name = models.CharField(max_length=128)
+    slug = models.SlugField(max_length=150, unique=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="created_spending_groups",
+    )
+    currency_code = models.CharField(max_length=12, blank=True)
+    group_type = models.CharField(max_length=32, choices=GroupType.choices, default=GroupType.FAMILY)
+    is_active = models.BooleanField(default=True)
+    notes = models.TextField(blank=True)
+
+    class Meta(TimeStampedModel.Meta):
+        ordering = ("name",)
+
+    def __str__(self) -> str:
+        return self.name
+
+
+class GroupMembership(TimeStampedModel):
+    class Role(models.TextChoices):
+        ADMIN = ("admin", "Admin")
+        MEMBER = ("member", "Member")
+
+    class Status(models.TextChoices):
+        INVITED = ("invited", "Invited")
+        ACTIVE = ("active", "Active")
+        LEFT = ("left", "Left")
+
+    group = models.ForeignKey(
+        SpendingGroup,
+        on_delete=models.CASCADE,
+        related_name="memberships",
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="group_memberships",
+    )
+    role = models.CharField(max_length=16, choices=Role.choices, default=Role.MEMBER)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.INVITED)
+    budget_share_percent = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    invited_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="sent_group_invitations",
+    )
+    joined_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta(TimeStampedModel.Meta):
+        constraints = [
+            models.UniqueConstraint(fields=("group", "user"), name="unique_members_per_group"),
+        ]
+
+    def activate(self):
+        self.status = self.Status.ACTIVE
+        self.joined_at = timezone.now()
+        self.save(update_fields=["status", "joined_at", "updated_at"])
+
+    def __str__(self) -> str:
+        return f"{self.user} -> {self.group}"
+
+
 class Category(TimeStampedModel):
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="categories",
+        null=True,
+        blank=True,
+    )
+    group = models.ForeignKey(
+        SpendingGroup,
         on_delete=models.CASCADE,
         related_name="categories",
         null=True,
@@ -35,7 +115,13 @@ class Category(TimeStampedModel):
         constraints = [
             models.UniqueConstraint(
                 fields=("user", "code"),
+                condition=Q(user__isnull=False),
                 name="unique_category_code_per_user",
+            ),
+            models.UniqueConstraint(
+                fields=("group", "code"),
+                condition=Q(group__isnull=False),
+                name="unique_category_code_per_group",
             )
         ]
 
@@ -46,6 +132,13 @@ class Category(TimeStampedModel):
 class Subcategory(TimeStampedModel):
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="subcategories",
+        null=True,
+        blank=True,
+    )
+    group = models.ForeignKey(
+        SpendingGroup,
         on_delete=models.CASCADE,
         related_name="subcategories",
         null=True,
@@ -66,6 +159,53 @@ class Subcategory(TimeStampedModel):
 
     def __str__(self) -> str:
         return f"{self.category.name} · {self.name}"
+
+
+class CategorySuggestion(TimeStampedModel):
+    class SuggestionType(models.TextChoices):
+        CATEGORY = ("category", "Category")
+        SUBCATEGORY = ("subcategory", "Subcategory")
+
+    class Status(models.TextChoices):
+        PENDING = ("pending", "Pending")
+        APPROVED = ("approved", "Approved")
+        REJECTED = ("rejected", "Rejected")
+
+    group = models.ForeignKey(
+        SpendingGroup,
+        on_delete=models.CASCADE,
+        related_name="category_suggestions",
+    )
+    requested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="category_suggestions",
+    )
+    suggestion_type = models.CharField(max_length=16, choices=SuggestionType.choices)
+    name = models.CharField(max_length=128)
+    parent_category = models.ForeignKey(
+        Category,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="suggested_children",
+    )
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
+    notes = models.TextField(blank=True)
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="reviewed_category_suggestions",
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta(TimeStampedModel.Meta):
+        ordering = ("-created_at",)
+
+    def __str__(self) -> str:
+        return f"{self.get_suggestion_type_display()} · {self.name}"
 
 
 class Card(TimeStampedModel):
@@ -101,13 +241,37 @@ class ExpenseAccount(TimeStampedModel):
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name="expense_accounts",
+        null=True,
+        blank=True,
+    )
+    group = models.ForeignKey(
+        SpendingGroup,
+        on_delete=models.CASCADE,
+        related_name="expense_accounts",
+        null=True,
+        blank=True,
     )
     name = models.CharField(max_length=128)
     is_default = models.BooleanField(default=False)
+    share_history_from = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text=(
+            "Share transactions occurring on or after this timestamp with the selected group. "
+            "Leave empty to share the full history."
+        ),
+    )
 
     class Meta(TimeStampedModel.Meta):
         unique_together = ("user", "name")
         ordering = ("name",)
+        constraints = [
+            models.UniqueConstraint(
+                fields=("group", "name"),
+                condition=Q(group__isnull=False),
+                name="unique_expense_account_per_group",
+            )
+        ]
 
     def __str__(self) -> str:
         return self.name
@@ -281,6 +445,13 @@ class Transaction(TimeStampedModel):
         on_delete=models.CASCADE,
         related_name="transactions",
     )
+    group = models.ForeignKey(
+        SpendingGroup,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="transactions",
+    )
     card = models.ForeignKey(
         Card,
         on_delete=models.SET_NULL,
@@ -317,6 +488,7 @@ class Transaction(TimeStampedModel):
     category_confidence = models.FloatField(null=True, blank=True)
     category_source = models.CharField(max_length=32, blank=True)
     metadata = models.JSONField(default=dict, blank=True)
+    needs_review = models.BooleanField(default=False, db_index=True)
 
     class Meta(TimeStampedModel.Meta):
         constraints = [

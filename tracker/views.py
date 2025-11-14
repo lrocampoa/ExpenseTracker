@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import calendar
 import json
 import logging
 import os
@@ -47,6 +48,7 @@ from tracker.services import rule_seeding
 from tracker.services import rule_suggestions
 from tracker.services import rules as rules_service
 from tracker.services import categorizer
+from tracker.services import review as review_service
 from tracker.services.gmail import GmailCredentialManager
 
 logger = logging.getLogger(__name__)
@@ -60,7 +62,7 @@ class DashboardView(LoginRequiredMixin, TemplateView):
         "last90": {"label": "Últimos 90 días", "days": 90},
         "year_to_date": {"label": "Año en curso", "days": None, "mode": "ytd"},
     }
-    LOW_CONFIDENCE_THRESHOLD = 0.6
+    LOW_CONFIDENCE_THRESHOLD = review_service.confidence_threshold()
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -124,11 +126,26 @@ class DashboardView(LoginRequiredMixin, TemplateView):
         previous_end = start
         previous_start = previous_end - delta
         days = max(delta.days, 1)
+        total_days = days
+        period_end = end
+        if option.get("days"):
+            total_days = option["days"]
+            period_end = start + timedelta(days=total_days)
+        elif range_key == "this_month":
+            _, month_days = calendar.monthrange(start.year, start.month)
+            total_days = month_days or days
+            period_end = start + timedelta(days=total_days)
+        elif range_key == "year_to_date":
+            year = start.year
+            total_days = 366 if calendar.isleap(year) else 365
+            period_end = start.replace(year=year + 1, month=1, day=1)
         return {
             "label": option["label"],
             "start": start,
             "end": end,
             "days": days,
+            "total_days": total_days,
+            "period_end": period_end,
             "range_key": range_key,
             "previous_start": previous_start,
             "previous_end": previous_end,
@@ -207,10 +224,7 @@ class DashboardView(LoginRequiredMixin, TemplateView):
         failed = base_qs.filter(parse_status=models.Transaction.ParseStatus.FAILED).count()
         if failed:
             alerts.append({"label": "Errores de parseo", "value": failed, "severity": "error"})
-        review = base_qs.filter(
-            Q(parse_confidence__lt=self.LOW_CONFIDENCE_THRESHOLD)
-            | Q(category_confidence__lt=self.LOW_CONFIDENCE_THRESHOLD)
-        ).count()
+        review = base_qs.filter(needs_review=True).count()
         if review:
             alerts.append({"label": "Pendientes de revisión", "value": review, "severity": "info"})
         llm_usage = (
@@ -305,7 +319,7 @@ class DashboardView(LoginRequiredMixin, TemplateView):
             (item.get("budget_limit") or Decimal("0")) for item in category_rows if item.get("budget_limit")
         )
         spent = hero.get("total_spend") or Decimal("0")
-        days_total = max(period.get("days") or 0, 1)
+        days_total = max(period.get("total_days") or period.get("days") or 0, 1)
         elapsed_days = days_total
         days_remaining = 0
         now = timezone.now()
@@ -561,8 +575,7 @@ class DashboardView(LoginRequiredMixin, TemplateView):
         attention = (
             base_qs.filter(
                 Q(category__isnull=True)
-                | Q(parse_confidence__lt=self.LOW_CONFIDENCE_THRESHOLD)
-                | Q(category_confidence__lt=self.LOW_CONFIDENCE_THRESHOLD)
+                | Q(needs_review=True)
                 | Q(amount__gte=high_amount_threshold)
             )
             .order_by("-transaction_date")
@@ -820,7 +833,33 @@ class DashboardView(LoginRequiredMixin, TemplateView):
             "recent": recent,
             "top_merchants": merchants,
         }
+    
+    
+class ReviewQueueView(LoginRequiredMixin, ListView):
+    template_name = "tracker/review_queue.html"
+    context_object_name = "transactions"
+    paginate_by = 25
 
+    def get_queryset(self):
+        return (
+            models.Transaction.objects.filter(user=self.request.user, needs_review=True)
+            .select_related("category", "card", "email")
+            .order_by("-updated_at")
+        )
+
+    def post(self, request, *args, **kwargs):
+        action = request.POST.get("action")
+        transaction_id = request.POST.get("transaction_id")
+        if action == "resolve" and transaction_id:
+            transaction = get_object_or_404(
+                models.Transaction,
+                pk=transaction_id,
+                user=request.user,
+            )
+            transaction.needs_review = False
+            transaction.save(update_fields=["needs_review", "updated_at"])
+            messages.success(request, "Transacción marcada como revisada.")
+        return redirect("tracker:review_queue")
 
 
 class TransactionListView(LoginRequiredMixin, ListView):
@@ -887,6 +926,8 @@ class TransactionListView(LoginRequiredMixin, ListView):
             qs = qs.filter(merchant_name=data["merchant"])
         if data.get("uncategorized"):
             qs = qs.filter(category__isnull=True)
+        if data.get("needs_review"):
+            qs = qs.filter(needs_review=True)
         if data.get("card_last4"):
             qs = qs.filter(card_last4=data["card_last4"])
         if data.get("date_from"):

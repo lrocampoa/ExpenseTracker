@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone as dt_timezone
 from decimal import Decimal
 from unittest import mock
 
@@ -304,6 +304,32 @@ class TransactionViewsTests(TestCase):
         self.assertEqual(control["spent"], response.context["hero"]["total_spend"])
         self.assertEqual(control["status"], "on_track")
         self.assertLess(control["projected_total"], control["total_budget"])
+
+    @mock.patch("tracker.views.timezone.now")
+    def test_dashboard_spend_control_days_remaining_for_month(self, mock_now):
+        fixed_now = datetime(2024, 5, 10, tzinfo=dt_timezone.utc)
+        mock_now.return_value = fixed_now
+        self.category.budget_limit = Decimal("210.00")
+        self.category.save(update_fields=["budget_limit"])
+        self.transaction.transaction_date = fixed_now - timedelta(days=60)
+        self.transaction.save(update_fields=["transaction_date"])
+        tx_kwargs = {
+            "email": self.email,
+            "category": self.category,
+            "amount": Decimal("42.00"),
+            "currency_code": "CRC",
+            "transaction_date": fixed_now - timedelta(days=1),
+            "reference_id": "monthly-budget",
+        }
+        if hasattr(models.Transaction, "user_id"):
+            tx_kwargs["user"] = self.user
+        models.Transaction.objects.create(**tx_kwargs)
+        response = self.client.get(f"{reverse('tracker:dashboard')}?range=this_month")
+        self.assertEqual(response.status_code, 200)
+        control = response.context["spend_control"]
+        self.assertEqual(control["days_total"], 31)
+        self.assertEqual(control["days_remaining"], 21)
+        self.assertEqual(control["daily_allowance"], Decimal("8"))
 
     def test_promote_rule_creates_category_rule(self):
         self.transaction.card_last4 = "7777"

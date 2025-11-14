@@ -11,6 +11,7 @@ from django.db import transaction as db_transaction
 from django.db.models import Q
 
 from tracker import models
+from tracker.services import review as review_service
 
 
 @dataclass
@@ -121,11 +122,16 @@ def _apply_result(trx: models.Transaction, result: CategorizationResult) -> None
             }
         )
         trx.metadata = metadata
+        trx.needs_review = review_service.should_flag(
+            parse_confidence=trx.parse_confidence,
+            category_confidence=result.confidence,
+        )
         trx.save(update_fields=[
             "category",
             "subcategory",
             "category_confidence",
             "category_source",
             "metadata",
+            "needs_review",
             "updated_at",
         ])

@@ -1,0 +1,82 @@
+{% extends "tracker/base.html" %}
+{% load formatting %}
+{% block title %}Revisar pendientes{% endblock %}
+{% block content %}
+<section class="section-card">
+  <div class="section-header">
+    <div>
+      <p class="eyebrow">Calidad de datos</p>
+      <h1>Revisar pendientes</h1>
+      <p class="muted">Transacciones con parseo o categorización de baja confianza.</p>
+    </div>
+    {% if transactions %}
+      <span class="status-pill">{{ page_obj.paginator.count }} pendientes</span>
+    {% endif %}
+  </div>
+  {% if transactions %}
+    <div class="table-wrapper">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Transacción</th>
+            <th>Monto</th>
+            <th>Parse confidence</th>
+            <th>Cat. confidence</th>
+            <th>Acciones</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for transaction in transactions %}
+            <tr>
+              <td>
+                <strong>{{ transaction.merchant_name|default:"(sin comercio)" }}</strong>
+                <div class="muted">
+                  {{ transaction.transaction_date|date:"d M Y H:i" }}
+                  · {{ transaction.card.label|default_if_none:"Tarjeta sin etiqueta" }}
+                </div>
+              </td>
+              <td>{{ transaction.amount|default:0|format_number }} {{ transaction.currency_code }}</td>
+              <td>
+                {% if transaction.parse_confidence %}
+                  {{ transaction.parse_confidence|format_number:2 }}
+                {% else %}
+                  <span class="muted">n/a</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if transaction.category_confidence %}
+                  {{ transaction.category_confidence|format_number:2 }}
+                {% else %}
+                  <span class="muted">n/a</span>
+                {% endif %}
+              </td>
+              <td class="table-actions">
+                <a class="btn btn-secondary btn-small" href="{% url 'tracker:transaction_detail' transaction.pk %}?edit=1">Ver detalle</a>
+                <form method="post" class="inline-action-form">
+                  {% csrf_token %}
+                  <input type="hidden" name="action" value="resolve">
+                  <input type="hidden" name="transaction_id" value="{{ transaction.pk }}">
+                  <button type="submit" class="btn btn-primary btn-small">Marcar revisado</button>
+                </form>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% if is_paginated %}
+      <div class="pagination">
+        {% if page_obj.has_previous %}
+          <a href="?page={{ page_obj.previous_page_number }}">Anterior</a>
+        {% endif %}
+        <span class="active">Página {{ page_obj.number }} / {{ page_obj.paginator.num_pages }}</span>
+        {% if page_obj.has_next %}
+          <a href="?page={{ page_obj.next_page_number }}">Siguiente</a>
+        {% endif %}
+      </div>
+    {% endif %}
+  {% else %}
+    <p class="muted">No hay transacciones pendientes 🎉.</p>
+  {% endif %}
+</section>
+{% endblock %}

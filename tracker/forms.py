@@ -70,6 +70,10 @@ class TransactionFilterForm(forms.Form):
         required=False,
         label="Solo sin categoría",
     )
+    needs_review = forms.BooleanField(
+        required=False,
+        label="Solo pendientes de revisión",
+    )
     subcategory = forms.ModelChoiceField(
         queryset=models.Subcategory.objects.none(),
         required=False,

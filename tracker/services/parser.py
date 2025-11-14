@@ -14,6 +14,7 @@ from bs4 import BeautifulSoup
 
 from tracker import models
 from tracker.services.categorizer import categorize_transaction
+from tracker.services import review as review_service
 
 CARD_LAST4_REGEXES = [
     re.compile(r"\*{2,}\s*(?P<card>\d{4})"),
@@ -265,6 +266,14 @@ def create_transaction_from_email(
         return None
 
     card = models.Card.objects.filter(last4=parsed.card_last4).first()
+    parse_confidence = review_service.score_parse_confidence(
+        amount=parsed.amount,
+        merchant_name=parsed.merchant_name,
+        transaction_date=parsed.transaction_date,
+        reference_id=parsed.reference_id,
+        raw_body=email.raw_body,
+        card_detected=bool(card),
+    )
 
     if existing_transaction:
         transaction = existing_transaction
@@ -283,6 +292,11 @@ def create_transaction_from_email(
             transaction.card = card
         if hasattr(transaction, "user_id") and not transaction.user and getattr(email, "user", None):
             transaction.user = email.user
+        transaction.parse_confidence = parse_confidence
+        transaction.needs_review = review_service.should_flag(
+            parse_confidence=parse_confidence,
+            category_confidence=transaction.category_confidence,
+        )
         transaction.save(
             update_fields=[
                 "reference_id",
@@ -294,6 +308,8 @@ def create_transaction_from_email(
                 "parse_status",
                 "card",
                 "user",
+                "parse_confidence",
+                "needs_review",
                 "updated_at",
             ]
         )
@@ -309,6 +325,11 @@ def create_transaction_from_email(
                 "transaction_date": parsed.transaction_date,
                 "parse_status": models.Transaction.ParseStatus.PARSED,
                 "user": getattr(email, "user", None),
+                "parse_confidence": parse_confidence,
+                "needs_review": review_service.should_flag(
+                    parse_confidence=parse_confidence,
+                    category_confidence=None,
+                ),
             },
         )
 
