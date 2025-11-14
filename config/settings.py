@@ -32,7 +32,7 @@ DEBUG = os.getenv("DJANGO_DEBUG", "0") in {"1", "true", "True"}
 allowed_hosts_env = os.getenv("DJANGO_ALLOWED_HOSTS", "")
 ALLOWED_HOSTS = [host.strip() for host in allowed_hosts_env.split(",") if host.strip()]
 if not ALLOWED_HOSTS:
-    ALLOWED_HOSTS = ["localhost", "127.0.0.1"]
+    ALLOWED_HOSTS = ["localhost", "127.0.0.1","192.168.100.68"]
 
 csrf_origins = os.getenv("DJANGO_CSRF_TRUSTED_ORIGINS", "")
 CSRF_TRUSTED_ORIGINS = [origin.strip() for origin in csrf_origins.split(",") if origin.strip()]
@@ -154,6 +154,14 @@ GMAIL_SEARCH_QUERY = os.getenv(
     "from:(notificacion@notificacionesbaccr.com OR notificaciones@baccredomatic.com)",
 )
 GMAIL_MAX_MESSAGES_PER_SYNC = int(os.getenv("GMAIL_MAX_MESSAGES_PER_SYNC", "50"))
+MS_GRAPH_CLIENT_ID = os.getenv("MS_GRAPH_CLIENT_ID", "")
+MS_GRAPH_CLIENT_SECRET = os.getenv("MS_GRAPH_CLIENT_SECRET", "")
+MS_GRAPH_TENANT_ID = os.getenv("MS_GRAPH_TENANT_ID", "common")
+MS_GRAPH_REDIRECT_URI = os.getenv("MS_GRAPH_REDIRECT_URI", "")
+ms_graph_scopes_env = os.getenv("MS_GRAPH_SCOPES", "https://graph.microsoft.com/Mail.Read")
+MS_GRAPH_SCOPES = [scope.strip() for scope in ms_graph_scopes_env.split(",") if scope.strip()]
+OUTLOOK_SEARCH_QUERY = os.getenv("OUTLOOK_SEARCH_QUERY", "from:notificacion@notificacionesbaccr.com")
+OUTLOOK_MAX_MESSAGES_PER_SYNC = int(os.getenv("OUTLOOK_MAX_MESSAGES_PER_SYNC", str(GMAIL_MAX_MESSAGES_PER_SYNC)))
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
@@ -180,6 +188,11 @@ ACCOUNT_RATE_LIMITS = {
     'login_failed': '5/5m',
 }
 
+GOOGLE_LOGIN_SCOPES = ["profile", "email"]
+for scope in GMAIL_SCOPES:
+    if scope not in GOOGLE_LOGIN_SCOPES:
+        GOOGLE_LOGIN_SCOPES.append(scope)
+
 SOCIALACCOUNT_PROVIDERS = {
     'google': {
         'APP': {
@@ -187,8 +200,12 @@ SOCIALACCOUNT_PROVIDERS = {
             'secret': os.getenv('GOOGLE_LOGIN_CLIENT_SECRET', ''),
             'key': '',
         },
-        'SCOPE': ['profile', 'email'],
-        'AUTH_PARAMS': {'access_type': 'online'},
+        'SCOPE': GOOGLE_LOGIN_SCOPES,
+        'AUTH_PARAMS': {
+            'access_type': 'offline',
+            'prompt': 'consent',
+            'include_granted_scopes': 'true',
+        },
     }
 }
 

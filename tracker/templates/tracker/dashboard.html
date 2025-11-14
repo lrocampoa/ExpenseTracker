@@ -81,31 +81,209 @@
         <span class="kpi-muted">Tarjetas con gasto en el periodo</span>
       </div>
     </div>
-  </section>
+</section>
 
-<section class="section-card">
+<section class="section-card category-section">
+  <div class="section-header">
+    <h2>Insight por categoría</h2>
+    <p class="muted">Participación y variación vs periodo previo</p>
+  </div>
+  {% if expense_filter.is_active %}
+    <div class="info-callout">
+      <strong>{{ expense_filter.label }}</strong>
+      <span>Presupuesto global, gasto filtrado por esta cuenta; puede haber montos adicionales en otras cuentas.</span>
+    </div>
+  {% endif %}
+  <div class="category-section-body">
+    <div class="category-table">
+      <div class="table-wrapper">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Categoría</th>
+              <th>Gasto</th>
+              <th>Presupuesto</th>
+              <th>Disponible</th>
+              <th>Uso presupuesto</th>
+              <th>Participación</th>
+              <th>Δ periodo anterior</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in category_insights %}
+              <tr>
+                <td>{{ item.label }}</td>
+                <td>{{ item.total|format_number }}</td>
+                <td>
+                  {% if item.budget_limit %}
+                    {{ item.budget_limit|format_number }}
+                  {% else %}
+                    <span class="muted">n/a</span>
+                  {% endif %}
+                </td>
+                <td>
+                  {% if item.budget_remaining is not None %}
+                    <div class="budget-progress">
+                      <div class="budget-progress-track">
+                        <span
+                          class="budget-progress-fill {% if item.is_budget_over %}over{% endif %}"
+                          style="width: {{ item.budget_fill_pct }}%"
+                        ></span>
+                      </div>
+                      <div class="budget-progress-meta">
+                        <strong class="{% if item.is_budget_over %}delta-up{% endif %}">
+                          {{ item.budget_remaining_abs|format_number }}
+                        </strong>
+                        <small>
+                          {% if item.is_budget_over %}
+                            sobrepasado
+                          {% else %}
+                            por gastar
+                          {% endif %}
+                        </small>
+                      </div>
+                    </div>
+                  {% else %}
+                    <span class="muted">n/a</span>
+                  {% endif %}
+                </td>
+                <td>
+                  {% if item.budget_limit %}
+                    <span class="{% if item.budget_used_pct and item.budget_used_pct > 100 %}delta-up{% endif %}">
+                      {{ item.budget_used_pct|default_if_none:0|format_number:1 }}%
+                    </span>
+                  {% else %}
+                    <span class="muted">n/a</span>
+                  {% endif %}
+                </td>
+                <td>{{ item.share|format_number:1 }}%</td>
+                <td>
+                  {% if item.delta_pct %}
+                    <span class="{% if item.delta_pct > 0 %}delta-up{% else %}delta-down{% endif %}">
+                      {% if item.delta_pct > 0 %}+{% endif %}{{ item.delta_pct|format_number:1 }}%
+                    </span>
+                  {% else %}
+                    <span class="kpi-muted">n/a</span>
+                  {% endif %}
+                </td>
+              </tr>
+            {% empty %}
+              <tr>
+                <td colspan="7" class="muted">Aún no hay categorías para este rango.</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <aside class="category-budget-chart">
+      <div class="chart-card">
+        <h3>Uso de presupuesto</h3>
+        <p class="muted">Top categorías con límite asignado</p>
+        <ul class="budget-chart-list">
+          {% for row in category_budget_chart %}
+            <li>
+              <div class="budget-chart-head">
+                <span>{{ row.label }}</span>
+                <small>{{ row.spent|format_number }} / {{ row.budget|format_number }}</small>
+              </div>
+              <div class="budget-chart-track">
+                <span class="budget-chart-fill {% if row.is_over %}over{% endif %}" style="width: {{ row.fill_pct }}%"></span>
+              </div>
+              <span class="budget-chart-meta {% if row.is_over %}delta-up{% endif %}">{{ row.used_pct|format_number:1 }}% consumido</span>
+            </li>
+          {% empty %}
+            <li class="muted">Agrega presupuestos a tus categorías para ver este gráfico.</li>
+          {% endfor %}
+        </ul>
+      </div>
+    </aside>
+  </div>
+</section>
+
+<section class="section-card budget-control">
   <div class="section-header">
     <div>
-      <h2>Tendencia de gasto</h2>
-      <p class="muted">Series diarias por moneda</p>
+      <h2>Control de presupuesto</h2>
+      <p class="muted">Proyección del periodo seleccionado</p>
     </div>
   </div>
-  <div class="trend-table">
-    <div class="trend-row trend-head">
-      <span>Día</span>
-      <span>Transacciones</span>
-      <span>Total</span>
-    </div>
-    {% for row in spending_trend %}
-      <div class="trend-row">
-        <span>{{ row.day|date:"d M" }} · {{ row.currency_code }}</span>
-        <span>{{ row.count|format_number:0 }}</span>
-        <span>{{ row.total|format_number }}</span>
+  {% if spend_control.has_budget %}
+    <div class="budget-control-layout">
+      <div class="budget-control-summary">
+        <p class="muted">Avance del presupuesto</p>
+        <div class="budget-progress">
+          <div class="budget-progress-track">
+            <span
+              class="budget-progress-fill {% if spend_control.status == 'risk' %}over{% endif %}"
+              style="width: {{ spend_control.burn_pct }}%"
+            ></span>
+          </div>
+          <div class="budget-control-meta">
+            <div>
+              <p class="eyebrow">Gastado</p>
+              <strong>{{ spend_control.spent|format_number }}</strong>
+            </div>
+            <div class="text-right">
+              <p class="eyebrow">Presupuesto</p>
+              <strong>{{ spend_control.total_budget|format_number }}</strong>
+            </div>
+          </div>
+        </div>
+        <div class="budget-status {% if spend_control.status == 'risk' %}status-risk{% else %}status-ok{% endif %}">
+          <div>
+            {% if spend_control.status == 'risk' %}
+              <strong>En riesgo</strong>
+              <p>Proyección excede {{ spend_control.status_delta_abs|format_number }}</p>
+            {% else %}
+              <strong>En rango</strong>
+              <p>Proyección conserva {{ spend_control.status_delta_abs|format_number }}</p>
+            {% endif %}
+          </div>
+          <span>{{ spend_control.projected_total|format_number }}</span>
+        </div>
       </div>
-    {% empty %}
-      <p class="muted">No hay datos en el rango seleccionado.</p>
-    {% endfor %}
-  </div>
+      <div class="budget-control-stat-grid">
+        <div class="stat-card">
+          <p class="muted">Saldo disponible</p>
+          <p class="stat-value {% if spend_control.remaining_budget < 0 %}delta-up{% endif %}">
+            {{ spend_control.remaining_budget|format_number }}
+          </p>
+          <small>vs presupuesto total</small>
+        </div>
+        <div class="stat-card">
+          <p class="muted">Ritmo diario actual</p>
+          <p class="stat-value">{{ spend_control.run_rate|format_number }}</p>
+          <small>Promedio últimos {{ spend_control.elapsed_days }} días</small>
+        </div>
+        <div class="stat-card">
+          <p class="muted">Ritmo ideal</p>
+          <p class="stat-value">{{ spend_control.ideal_rate|format_number }}</p>
+          <small>{{ spend_control.days_total }} días para {{ spend_control.total_budget|format_number }}</small>
+        </div>
+        <div class="stat-card">
+          <p class="muted">Días restantes</p>
+          <p class="stat-value">{{ spend_control.days_remaining }}</p>
+          <small>Periodo seleccionado</small>
+        </div>
+        <div class="stat-card">
+          <p class="muted">Recomendación diaria</p>
+          {% if spend_control.daily_allowance %}
+            <p class="stat-value">{{ spend_control.daily_allowance|format_number }}</p>
+            <small>Para mantenerte dentro del presupuesto</small>
+          {% else %}
+            <p class="stat-value muted">--</p>
+            <small>Sin días disponibles o sin saldo</small>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  {% else %}
+    <div class="empty-state">
+      <p>Define límites de presupuesto en tus categorías para desbloquear este control.</p>
+      <a class="mini-link" href="{% url 'tracker:categories' %}">Gestionar categorías</a>
+    </div>
+  {% endif %}
 </section>
 
 <section class="section-card">
@@ -266,130 +444,12 @@
   {% endif %}
 </section>
 
-<section class="section-grid">
-  <div class="section-card">
-    <div class="section-header">
-      <h2>Insight por categoría</h2>
-      <p class="muted">Participación y variación vs periodo previo</p>
-    </div>
-    {% if expense_filter.is_active %}
-      <div class="info-callout">
-        <strong>{{ expense_filter.label }}</strong>
-        <span>Presupuesto global, gasto filtrado por esta cuenta; puede haber montos adicionales en otras cuentas.</span>
-      </div>
-    {% endif %}
-    <div class="category-section-body">
-      <div class="category-table">
-        <div class="table-wrapper">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>Categoría</th>
-                <th>Gasto</th>
-                <th>Presupuesto</th>
-            <th>Disponible</th>
-            <th>Uso presupuesto</th>
-            <th>Participación</th>
-            <th>Δ periodo anterior</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for item in category_insights %}
-            <tr>
-              <td>{{ item.label }}</td>
-              <td>{{ item.total|format_number }}</td>
-              <td>
-                {% if item.budget_limit %}
-                  {{ item.budget_limit|format_number }}
-                {% else %}
-                  <span class="muted">n/a</span>
-                {% endif %}
-              </td>
-              <td>
-                {% if item.budget_remaining is not None %}
-                  <div class="budget-progress">
-                    <div class="budget-progress-track">
-                      <span
-                        class="budget-progress-fill {% if item.is_budget_over %}over{% endif %}"
-                        style="width: {{ item.budget_fill_pct }}%"
-                      ></span>
-                    </div>
-                    <div class="budget-progress-meta">
-                      <strong class="{% if item.is_budget_over %}delta-up{% endif %}">
-                        {{ item.budget_remaining_abs|format_number }}
-                      </strong>
-                      <small>
-                        {% if item.is_budget_over %}
-                          sobrepasado
-                        {% else %}
-                          por gastar
-                        {% endif %}
-                      </small>
-                    </div>
-                  </div>
-                {% else %}
-                  <span class="muted">n/a</span>
-                {% endif %}
-              </td>
-              <td>
-                {% if item.budget_limit %}
-                    <span class="{% if item.budget_used_pct and item.budget_used_pct > 100 %}delta-up{% endif %}">
-                    {{ item.budget_used_pct|default_if_none:0|format_number:1 }}%
-                  </span>
-                {% else %}
-                  <span class="muted">n/a</span>
-                {% endif %}
-              </td>
-              <td>{{ item.share|format_number:1 }}%</td>
-              <td>
-                {% if item.delta_pct %}
-                  <span class="{% if item.delta_pct > 0 %}delta-up{% else %}delta-down{% endif %}">
-                    {% if item.delta_pct > 0 %}+{% endif %}{{ item.delta_pct|format_number:1 }}%
-                  </span>
-                {% else %}
-                  <span class="kpi-muted">n/a</span>
-                {% endif %}
-              </td>
-            </tr>
-          {% empty %}
-            <tr>
-              <td colspan="7" class="muted">Aún no hay categorías para este rango.</td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-        </div>
-      </div>
-      <aside class="category-budget-chart">
-        <div class="chart-card">
-          <h3>Uso de presupuesto</h3>
-          <p class="muted">Top categorías con límite asignado</p>
-          <ul class="budget-chart-list">
-            {% for row in category_budget_chart %}
-              <li>
-                <div class="budget-chart-head">
-                  <span>{{ row.label }}</span>
-                  <small>{{ row.spent|format_number }} / {{ row.budget|format_number }}</small>
-                </div>
-                <div class="budget-chart-track">
-                  <span class="budget-chart-fill {% if row.is_over %}over{% endif %}" style="width: {{ row.fill_pct }}%"></span>
-                </div>
-                <span class="budget-chart-meta {% if row.is_over %}delta-up{% endif %}">{{ row.used_pct|format_number:1 }}% consumido</span>
-              </li>
-            {% empty %}
-              <li class="muted">Agrega presupuestos a tus categorías para ver este gráfico.</li>
-            {% endfor %}
-          </ul>
-        </div>
-      </aside>
-    </div>
+<section class="section-card">
+  <div class="section-header">
+    <h2>Señales de comercio</h2>
+    <p class="muted">Top comercios y posibles suscripciones</p>
   </div>
-  <div class="section-card">
-    <div class="section-header">
-      <h2>Señales de comercio</h2>
-      <p class="muted">Top comercios y posibles suscripciones</p>
-    </div>
-    <div class="stacked-block">
+  <div class="stacked-block">
       <div>
         <h3>Top comercios</h3>
         <ul class="simple-list">

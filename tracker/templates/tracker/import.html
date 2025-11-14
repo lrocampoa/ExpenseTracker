@@ -3,16 +3,46 @@
 {% block content %}
 <section class="import-card">
   <div class="import-header">
-    <h2>Importar movimientos desde Gmail</h2>
-    <p>Conecta tu cuenta y trae hasta los últimos 3 años de notificaciones.</p>
+    <h2>Importar movimientos automáticamente</h2>
+    <p>Conecta tus casillas (Gmail u Outlook/Hotmail) y ejecuta la sincronización bajo demanda.</p>
   </div>
-  {% if not has_credentials %}
-    <div class="alert alert-warning">Necesitas conectar tu cuenta de Gmail antes de importar.</div>
-    <a class="google-btn" href="{% url 'tracker:gmail_connect' %}">
+
+  <div class="mailbox-connect">
+    <a class="google-btn" href="{{ gmail_connect_url }}">
       <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google">
       Conectar Gmail
     </a>
-  {% else %}
+    <a class="outlook-btn" href="{{ outlook_connect_url }}">
+      <span class="icon">📧</span>
+      Conectar Outlook / Hotmail
+    </a>
+  </div>
+
+  {% if accounts %}
+    <div class="mailbox-list">
+      <h3>Cuentas conectadas</h3>
+      <ul>
+        {% for account in accounts %}
+          <li>
+            <div class="mailbox-label">
+              <span class="provider {{ account.provider_key }}">{{ account.provider }}</span>
+              <strong>{{ account.label }}</strong>
+              <small>{{ account.email }}</small>
+            </div>
+            <div class="mailbox-meta">
+              {% if account.last_synced_at %}
+                Última sincronización: {{ account.last_synced_at|date:"Y-m-d H:i" }}
+              {% else %}
+                Nunca sincronizado
+              {% endif %}
+              {% if account.retry_count %}
+                <span class="text-danger">Reintentos: {{ account.retry_count }}</span>
+              {% endif %}
+            </div>
+          </li>
+        {% endfor %}
+      </ul>
+    </div>
     <form method="post" class="auth-form">
       {% csrf_token %}
       {{ form.non_field_errors }}
@@ -20,8 +50,17 @@
         {{ form.years.label }}
         {{ form.years }}
       </label>
-      <button type="submit" class="btn btn-primary">Importar</button>
+      {% if form.recent_start_date %}
+        <p class="form-hint">
+          Última transacción importada el {{ form.recent_start_date|date:"d/m/Y" }}. Elige la primera opción para traer solo lo que falta hasta hoy.
+        </p>
+      {% endif %}
+      <button type="submit" class="btn btn-primary">Importar ahora</button>
     </form>
+  {% else %}
+    <div class="alert alert-warning">
+      Necesitas conectar al menos una cuenta de correo antes de importar.
+    </div>
   {% endif %}
 </section>
 {% endblock %}

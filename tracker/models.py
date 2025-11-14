@@ -1,3 +1,5 @@
+from typing import Optional
+
 from django.conf import settings
 from django.db import models
 from django.db.models import Q
@@ -111,6 +113,107 @@ class ExpenseAccount(TimeStampedModel):
         return self.name
 
 
+class EmailAccount(TimeStampedModel):
+    class Provider(models.TextChoices):
+        GMAIL = ("gmail", "Gmail / Google Workspace")
+        OUTLOOK = ("outlook", "Outlook / Hotmail / Office 365")
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="email_accounts",
+        null=True,
+        blank=True,
+    )
+    provider = models.CharField(max_length=32, choices=Provider.choices)
+    email_address = models.EmailField()
+    display_name = models.CharField(max_length=255, blank=True)
+    label = models.CharField(max_length=64, blank=True, help_text="Friendly name shown in settings.")
+    token_json = models.JSONField(default=dict, blank=True)
+    scopes = models.JSONField(default=list, blank=True)
+    token_expiry = models.DateTimeField(null=True, blank=True)
+    refresh_token = models.CharField(max_length=512, blank=True)
+    is_active = models.BooleanField(default=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta(TimeStampedModel.Meta):
+        constraints = [
+            models.UniqueConstraint(
+                fields=("provider", "email_address"),
+                name="unique_provider_email_account",
+            )
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.get_provider_display()} • {self.email_address}"
+
+
+class MailSyncState(TimeStampedModel):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="mail_sync_states",
+        null=True,
+        blank=True,
+    )
+    account = models.ForeignKey(
+        "EmailAccount",
+        on_delete=models.CASCADE,
+        related_name="sync_states",
+        null=True,
+        blank=True,
+    )
+    provider = models.CharField(
+        max_length=32,
+        choices=EmailAccount.Provider.choices,
+        default=EmailAccount.Provider.GMAIL,
+    )
+    label = models.CharField(max_length=64, default="primary")
+    query = models.CharField(max_length=500, blank=True)
+    last_synced_at = models.DateTimeField(null=True, blank=True)
+    fetched_messages = models.PositiveIntegerField(default=0)
+    retry_count = models.PositiveIntegerField(default=0)
+    checkpoint = models.JSONField(default=dict, blank=True, help_text="Provider-specific cursor state.")
+
+    class Meta(TimeStampedModel.Meta):
+        constraints = [
+            models.UniqueConstraint(
+                fields=("account", "label"),
+                name="unique_mail_sync_label_per_account",
+            )
+        ]
+
+    def __str__(self) -> str:
+        label = self.label or "primary"
+        provider = self.get_provider_display()
+        return f"{provider} sync ({label})"
+
+    @classmethod
+    def latest_for_account(cls, account: "EmailAccount", label: Optional[str] = "primary") -> Optional["MailSyncState"]:
+        """Return the newest sync state for the given account/label combination."""
+
+        if not account:
+            return None
+        lookup_label = label or "primary"
+        return (
+            cls.objects.filter(account=account, label=lookup_label)
+            .order_by("-updated_at")
+            .first()
+        )
+
+    def checkpoint_dict(self) -> dict:
+        """Safe helper to treat checkpoint JSONField as a dictionary."""
+
+        return self.checkpoint if isinstance(self.checkpoint, dict) else {}
+
+    def last_history_id(self) -> Optional[str]:
+        """Convenience accessor for the stored Gmail historyId."""
+
+        checkpoint = self.checkpoint_dict()
+        history_id = checkpoint.get("history_id")
+        return str(history_id) if history_id else None
+
+
 class EmailMessage(TimeStampedModel):
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -119,9 +222,24 @@ class EmailMessage(TimeStampedModel):
         null=True,
         blank=True,
     )
-    gmail_message_id = models.CharField(max_length=128, unique=True)
+    account = models.ForeignKey(
+        "EmailAccount",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="emails",
+    )
+    provider = models.CharField(
+        max_length=32,
+        choices=EmailAccount.Provider.choices,
+        default=EmailAccount.Provider.GMAIL,
+    )
+    mailbox_email = models.EmailField(blank=True)
+    gmail_message_id = models.CharField(max_length=128, unique=True, null=True, blank=True)
     thread_id = models.CharField(max_length=128, blank=True)
     history_id = models.CharField(max_length=64, blank=True)
+    external_message_id = models.CharField(max_length=255, blank=True)
+    internet_message_id = models.CharField(max_length=255, blank=True)
     subject = models.CharField(max_length=255, blank=True)
     sender = models.CharField(max_length=255, blank=True)
     snippet = models.TextField(blank=True)
@@ -133,6 +251,13 @@ class EmailMessage(TimeStampedModel):
 
     class Meta(TimeStampedModel.Meta):
         ordering = ("-internal_date", "-created_at")
+        constraints = [
+            models.UniqueConstraint(
+                fields=("provider", "external_message_id"),
+                condition=~Q(external_message_id=""),
+                name="unique_external_message_per_provider",
+            )
+        ]
 
     def __str__(self) -> str:
         return f"{self.subject or 'Email'} ({self.gmail_message_id})"

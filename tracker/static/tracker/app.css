@@ -817,20 +817,103 @@ body {
   align-items: center;
 }
 
-.trend-table {
-  margin-top: 1rem;
+.budget-control {
+  margin-top: 2rem;
 }
 
-.trend-row {
+.budget-control-layout {
   display: grid;
-  grid-template-columns: 1fr 120px 160px;
-  padding: 0.5rem 0;
-  border-bottom: 1px solid var(--border);
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: 2rem;
+  align-items: stretch;
 }
 
-.trend-head {
+@media (max-width: 1024px) {
+  .budget-control-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.budget-control-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.budget-control-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 1.5rem;
+}
+
+.budget-control-meta strong {
+  font-size: 1.5rem;
+}
+
+.budget-status {
+  border-radius: 1rem;
+  padding: 1rem 1.25rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+}
+
+.budget-status strong {
+  display: block;
+  margin-bottom: 0.2rem;
+}
+
+.budget-status p {
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.budget-status span {
+  font-size: 1.35rem;
   font-weight: 600;
+}
+
+.budget-status.status-risk {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.budget-status.status-ok {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.budget-control-stat-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.stat-card {
+  border: 1px solid var(--border);
+  border-radius: 0.9rem;
+  padding: 1rem;
+  background: white;
+}
+
+.stat-card .stat-value {
+  font-size: 1.35rem;
+  font-weight: 600;
+  margin: 0.2rem 0;
+}
+
+.stat-card small {
+  font-size: 0.8rem;
   color: var(--muted);
+}
+
+.empty-state {
+  border: 1px dashed var(--border);
+  border-radius: 0.9rem;
+  padding: 1.25rem;
+  background: #f8fafc;
+  text-align: center;
 }
 
 .data-table {
@@ -1717,6 +1800,30 @@ body.expense-modal-open {
   margin: 0 auto;
   max-width: 260px;
 }
+.outlook-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border-radius: 999px;
+  padding: 0.6rem 1rem;
+  text-decoration: none;
+  font-weight: 600;
+  background: #0f6cbd;
+  color: #fff;
+  box-shadow: 0 6px 15px rgba(15, 108, 189, 0.25);
+}
+
+.outlook-btn .icon {
+  font-size: 1.1rem;
+}
+
+.mailbox-connect {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin: 1.25rem 0 1.5rem;
+}
+
 .import-card {
   background: var(--card-bg);
   padding: 2rem;
@@ -1726,6 +1833,80 @@ body.expense-modal-open {
 
 .import-header h2 {
   margin: 0;
+}
+
+.mailbox-list {
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  padding: 1rem 1.25rem;
+  margin-bottom: 1.5rem;
+  background: #f9fafb;
+}
+
+.mailbox-list h3 {
+  margin-top: 0;
+  font-size: 1rem;
+  color: var(--muted);
+}
+
+.mailbox-list ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.mailbox-list li {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.35);
+  padding-bottom: 0.75rem;
+}
+
+.mailbox-list li:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.mailbox-label strong {
+  display: block;
+  font-size: 1rem;
+}
+
+.mailbox-label small {
+  color: var(--muted);
+}
+
+.mailbox-meta {
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.provider {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.07);
+  color: var(--text);
+  margin-bottom: 0.3rem;
+}
+
+.provider.gmail {
+  background: rgba(234, 67, 53, 0.12);
+  color: #d93025;
+}
+
+.provider.outlook {
+  background: rgba(15, 108, 189, 0.15);
+  color: #0f6cbd;
 }
 
 .alert {

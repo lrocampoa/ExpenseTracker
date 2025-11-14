@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from django import forms
 from django.db.models import Q
+from django.utils import timezone
+from django.utils.formats import date_format
 
 from tracker import models
 from tracker.services import account_seeding
@@ -401,9 +403,53 @@ class SubcategoryInlineForm(forms.ModelForm):
 
 
 class ImportForm(forms.Form):
+    RECENT_CHOICE = "recent"
     YEARS_CHOICES = (
-        (1, "Último año"),
-        (2, "Últimos 2 años"),
-        (3, "Últimos 3 años"),
+        ("1", "Último año"),
+        ("2", "Últimos 2 años"),
+        ("3", "Últimos 3 años"),
     )
-    years = forms.ChoiceField(choices=YEARS_CHOICES, label="Rango a importar", initial=1)
+    years = forms.ChoiceField(choices=YEARS_CHOICES, label="Rango a importar", initial=RECENT_CHOICE)
+
+    def __init__(self, *args, user=None, last_transaction_date=None, **kwargs):
+        self.user = user
+        self._provided_last_transaction = last_transaction_date
+        super().__init__(*args, **kwargs)
+        self._recent_start_date = self._resolve_recent_start_date()
+        self._recent_label = self._build_recent_label()
+        choices = list(self.YEARS_CHOICES)
+        if self._recent_start_date:
+            choices.insert(0, (self.RECENT_CHOICE, self._recent_label))
+            self.fields["years"].initial = self.RECENT_CHOICE
+        else:
+            self.fields["years"].initial = "1"
+        self.fields["years"].choices = choices
+
+    @property
+    def recent_start_date(self):
+        return self._recent_start_date
+
+    @property
+    def recent_choice_label(self):
+        return self._recent_label
+
+    def _resolve_recent_start_date(self):
+        if self._provided_last_transaction:
+            return timezone.localdate(self._provided_last_transaction)
+        if not self.user or not hasattr(models.Transaction, "user_id"):
+            return None
+        last_transaction = (
+            models.Transaction.objects.filter(user=self.user)
+            .order_by("-transaction_date", "-created_at")
+            .values_list("transaction_date", flat=True)
+            .first()
+        )
+        if last_transaction:
+            return timezone.localdate(last_transaction)
+        return None
+
+    def _build_recent_label(self):
+        if self._recent_start_date:
+            formatted = date_format(self._recent_start_date, "DATE_FORMAT")
+            return f"Última actualización detectada ({formatted} → hoy)"
+        return "Desde hoy (sin histórico previo)"

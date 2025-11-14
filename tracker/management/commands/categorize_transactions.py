@@ -1,4 +1,6 @@
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
+from django.db.models import Q
+from django.utils.dateparse import parse_datetime
 
 from tracker import models
 from tracker.services.categorizer import categorize_transaction
@@ -28,6 +30,14 @@ class Command(BaseCommand):
             "--user-email",
             help="Categorize solo transacciones de este usuario.",
         )
+        parser.add_argument(
+            "--account-email",
+            help="Limit categorization to transactions tied to this mailbox email.",
+        )
+        parser.add_argument(
+            "--since",
+            help="Only categorize transactions updated after this ISO-8601 timestamp.",
+        )
 
     def handle(self, *args, **options):
         qs = models.Transaction.objects.order_by("-transaction_date", "-created_at")
@@ -36,6 +46,15 @@ class Command(BaseCommand):
         user_email = options.get("user_email")
         if user_email and hasattr(models.Transaction, "user_id"):
             qs = qs.filter(user__email__iexact=user_email)
+        account_email = options.get("account_email")
+        if account_email:
+            qs = qs.filter(email__account__email_address__iexact=account_email)
+        since_value = options.get("since")
+        if since_value:
+            since_dt = parse_datetime(since_value)
+            if not since_dt:
+                raise CommandError("--since must be an ISO-8601 datetime string.")
+            qs = qs.filter(Q(transaction_date__gte=since_dt) | Q(updated_at__gte=since_dt))
         limit = options["limit"]
         processed = 0
         categorized = 0

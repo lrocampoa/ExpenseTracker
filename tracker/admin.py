@@ -122,6 +122,22 @@ class GmailSyncStateAdmin(admin.ModelAdmin):
     search_fields = ("label", "user_email", "history_id")
 
 
+@admin.register(models.EmailAccount)
+class EmailAccountAdmin(admin.ModelAdmin):
+    list_display = ("email_address", "provider", "user", "is_active", "updated_at")
+    list_filter = ("provider", "is_active")
+    search_fields = ("email_address", "user__email", "label")
+    autocomplete_fields = ("user",)
+
+
+@admin.register(models.MailSyncState)
+class MailSyncStateAdmin(admin.ModelAdmin):
+    list_display = ("label", "provider", "account", "last_synced_at", "fetched_messages", "retry_count")
+    list_filter = ("provider",)
+    search_fields = ("label", "account__email_address")
+    autocomplete_fields = ("account", "user")
+
+
 @admin.register(models.CategoryRule)
 class CategoryRuleAdmin(admin.ModelAdmin):
     list_display = ("match_value", "category", "subcategory", "match_field", "match_type", "priority", "is_active", "origin")

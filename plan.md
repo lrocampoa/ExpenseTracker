@@ -148,6 +148,12 @@
    - When a user changes a category, offer “convert to rule” suggestions and log manual overrides.
 4. **API + Deployment** (Phase 4 & 5)
    - Build DRF endpoints (transactions, categories, import runs) and create Docker/Render configs + cron schedule for `run_pipeline`.
+5. **Hotmail Integration** ✅
+   - Microsoft identity device + OAuth flows allow linking multiple Outlook/Hotmail inboxes per user.
+   - Unified mailbox sync command runs both Gmail history-based fetches and Microsoft Graph delta queries, storing per-account checkpoints.
+6. **Promerica / Banco Nacional / Banco de Costa Rica Ingestion**
+   - Expand parser + rule set to cover Promerica, Banco Nacional, and Banco de Costa Rica email templates (HTML + plain text variants).
+   - Provide fixtures/tests per bank and allow per-bank routing inside the ingestion pipeline.
 
 ## 8. Insightful Dashboard Plan
 - **Available data to leverage**
@@ -187,3 +193,26 @@
   - Add queryset helpers to scope aggregations per user/time window and reuse them across API + templates.
   - Materialize frequently used aggregates (daily spend, category totals) via cached tables or Redis to keep dashboard <200ms.
   - Expose dashboard data through dedicated API endpoints to power both Django templates now and richer clients later.
+
+## 9. Recent Missing Transactions Import Plan ✅
+**Goal:** Automatically pull only the newest card notifications that do not yet exist as `Transaction` rows so users always see fresh data without reprocessing the full mailbox. Implemented via Gmail history-based incremental sync + the `python manage.py import_recent_transactions` command (scoped by user/email/since) introduced in this iteration.
+
+1. **Detect the gap & scope processing**
+   - Add helper queries (e.g., on `Transaction` or `EmailMessage`) that capture the latest `history_id`, `internal_date`, and `transaction_date` per `EmailAccount` via `MailSyncState`.
+   - When running `process_emails`, allow filtering by `account`/`user` and `processed_at__isnull=True`, plus a `--since` timestamp derived from the last stored transaction so we only parse emails that could produce missing rows.
+   - Keep existing dedupe guarantees (`gmail_message_id`, `reference_id`) so retrying the import never creates duplicates even if Gmail re-sends history fragments.
+
+2. **Incremental Gmail fetch for “latest only” imports**
+   - Extend `GmailIngestionService.sync()` to read the stored `history_id`; if present, call `users().history().list` to collect only message ids added since that checkpoint, then fetch just those full messages.
+   - Fallback to the current search-based listing when there is no checkpoint or the Gmail history window expired (404), and immediately seed a fresh checkpoint with the returned `historyId`.
+   - Persist richer checkpoint metadata (history id, cursor timestamp, batch size) on `MailSyncState` so each account knows exactly which messages have already been ingested.
+
+3. **Targeted “import recent” management command**
+   - Create `python manage.py import_recent_transactions` (wrapper around `run_pipeline`) that: (a) triggers Gmail/Outlook sync in incremental mode, (b) processes only the newly stored `EmailMessage` ids, and (c) categorizes just the transactions touched in that run.
+   - Support `--user-email`, `--account-email`, `--since`/`--limit` flags so support can backfill a single tenant or catch up after downtime without replaying months of data.
+   - Emit summary stats (“fetched X, already in DB Y, transactions created Z”) so operators can confirm that only missing rows were imported.
+
+4. **Verification, alerts, and UI hooks**
+   - Surface last import timestamp, next scheduled sync, and “pending emails” count on the settings/dashboard screens using `MailSyncState` + `EmailMessage` data.
+   - Add unit tests around the Gmail history path, the new command wrapper, and regression tests that prove re-running the import when nothing is missing performs zero writes.
+   - Log or notify (email/slack) when sync falls behind a threshold (e.g., >2 hours since last historyId) so we can proactively trigger the “import recent” task.

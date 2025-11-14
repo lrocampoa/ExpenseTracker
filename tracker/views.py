@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
+import secrets
 from datetime import timedelta
 from decimal import Decimal
 
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
+from django.core.exceptions import ImproperlyConfigured
+from django.core.management import call_command
 from django.db.models import Avg, Count, Max, Q, Sum
-from django.db.models.functions import TruncDate, TruncMonth
+from django.db.models.functions import TruncMonth
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse, reverse_lazy
 from django.utils import timezone
@@ -18,6 +22,7 @@ from django.views import View
 from django.views.generic import DetailView, FormView, ListView, TemplateView, UpdateView
 from django.views.generic.edit import FormMixin
 
+import msal
 from google_auth_oauthlib.flow import Flow
 
 from tracker import models
@@ -42,11 +47,7 @@ from tracker.services import rule_seeding
 from tracker.services import rule_suggestions
 from tracker.services import rules as rules_service
 from tracker.services import categorizer
-from tracker.services.gmail import (
-    GmailCredentialManager,
-    GmailIngestionService,
-    MissingCredentialsError,
-)
+from tracker.services.gmail import GmailCredentialManager
 
 logger = logging.getLogger(__name__)
 
@@ -88,9 +89,9 @@ class DashboardView(LoginRequiredMixin, TemplateView):
                 "period": period,
                 "hero": hero,
                 "alerts": self._build_alerts(base_qs, period),
-                "spending_trend": self._build_trend(period_amount_qs),
                 "category_insights": category_insights,
                 "category_budget_chart": self._build_category_budget_chart(category_insights),
+                "spend_control": self._build_spend_control(period, hero, category_insights),
                 "merchant_signals": self._build_merchant_signals(period_amount_qs, period),
                 "card_health": self._build_card_health(period_qs),
                 "expense_accounts": self._build_expense_accounts(
@@ -233,23 +234,6 @@ class DashboardView(LoginRequiredMixin, TemplateView):
             )
         return alerts
 
-    def _build_trend(self, qs):
-        trend = (
-            qs.annotate(day=TruncDate("transaction_date"))
-            .values("day", "currency_code")
-            .annotate(total=Sum("amount"), count=Count("id"))
-            .order_by("day")
-        )
-        return [
-            {
-                "day": entry["day"],
-                "currency_code": entry["currency_code"],
-                "total": entry["total"],
-                "count": entry["count"],
-            }
-            for entry in trend
-        ]
-
     def _build_category_insights(self, current_qs, previous_qs):
         categories = list(
             current_qs.values("category_id", "category__name", "category__budget_limit")
@@ -315,6 +299,74 @@ class DashboardView(LoginRequiredMixin, TemplateView):
             )
         chart_rows.sort(key=lambda row: row["used_pct"], reverse=True)
         return chart_rows[:limit]
+
+    def _build_spend_control(self, period, hero, category_rows):
+        total_budget = sum(
+            (item.get("budget_limit") or Decimal("0")) for item in category_rows if item.get("budget_limit")
+        )
+        spent = hero.get("total_spend") or Decimal("0")
+        days_total = max(period.get("days") or 0, 1)
+        elapsed_days = days_total
+        days_remaining = 0
+        now = timezone.now()
+        if period.get("start"):
+            elapsed_days = min(
+                max((now - period["start"]).days + 1, 1),
+                days_total,
+            )
+            days_remaining = max(days_total - elapsed_days, 0)
+        if not total_budget or total_budget == Decimal("0"):
+            return {
+                "has_budget": False,
+                "spent": spent,
+                "total_budget": Decimal("0"),
+                "burn_pct": 0,
+                "remaining_budget": None,
+                "projected_total": None,
+                "status_delta": None,
+                "status_delta_abs": None,
+                "status": None,
+                "run_rate": None,
+                "ideal_rate": None,
+                "elapsed_days": elapsed_days,
+                "days_total": days_total,
+                "days_remaining": days_remaining,
+                "daily_allowance": None,
+            }
+        run_rate = spent / Decimal(elapsed_days) if elapsed_days else Decimal("0")
+        ideal_rate = total_budget / Decimal(days_total) if days_total else None
+        projected_total = run_rate * Decimal(days_total)
+        remaining_budget = total_budget - spent
+        daily_allowance = (
+            (remaining_budget / Decimal(days_remaining))
+            if days_remaining and remaining_budget > Decimal("0")
+            else None
+        )
+        burn_pct = float(
+            min(
+                max((spent / total_budget) * Decimal("100"), Decimal("0")),
+                Decimal("180"),
+            )
+        )
+        status_delta = projected_total - total_budget
+        status = "risk" if status_delta > 0 else "on_track"
+        return {
+            "has_budget": True,
+            "spent": spent,
+            "total_budget": total_budget,
+            "burn_pct": burn_pct,
+            "remaining_budget": remaining_budget,
+            "projected_total": projected_total,
+            "status_delta": status_delta,
+            "status_delta_abs": abs(status_delta),
+            "status": status,
+            "run_rate": run_rate,
+            "ideal_rate": ideal_rate,
+            "elapsed_days": elapsed_days,
+            "days_total": days_total,
+            "days_remaining": days_remaining,
+            "daily_allowance": daily_allowance,
+        }
 
     def _build_merchant_signals(self, qs, period):
         top_merchants = list(
@@ -604,14 +656,24 @@ class DashboardView(LoginRequiredMixin, TemplateView):
     def _build_sync_health(self):
         stale_minutes = getattr(settings, "DASHBOARD_SYNC_STALE_MINUTES", 30)
         cutoff = timezone.now() - timedelta(minutes=stale_minutes)
-        states_qs = models.GmailSyncState.objects.filter(user=self.request.user).order_by("label")
+        states_qs = (
+            models.MailSyncState.objects.filter(user=self.request.user)
+            .select_related("account")
+            .order_by("account__email_address", "label")
+        )
         states = []
         stale_labels = []
         for state in states_qs:
             is_stale = not state.last_synced_at or state.last_synced_at < cutoff
+            history_id = ""
+            checkpoint = state.checkpoint or {}
+            if isinstance(checkpoint, dict):
+                history_id = checkpoint.get("history_id") or ""
             state_dict = {
                 "label": state.label,
-                "history_id": state.history_id,
+                "provider": state.provider,
+                "account_email": getattr(state.account, "email_address", ""),
+                "history_id": history_id,
                 "last_synced_at": state.last_synced_at,
                 "fetched_messages": state.fetched_messages,
                 "retry_count": getattr(state, "retry_count", 0),
@@ -1022,40 +1084,44 @@ class ImportTransactionsView(LoginRequiredMixin, FormView):
     def get_success_url(self):
         return reverse_lazy("tracker:transaction_list")
 
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs["user"] = self.request.user
+        kwargs["last_transaction_date"] = self._latest_transaction_datetime()
+        return kwargs
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["has_credentials"] = self._has_credentials()
+        context["accounts"] = self._account_rows()
+        context["gmail_connect_url"] = reverse("tracker:gmail_connect")
+        context["outlook_connect_url"] = reverse("tracker:outlook_connect")
+        context["last_transaction_date"] = self._latest_transaction_datetime()
         return context
 
     def form_valid(self, form):
         if not self._has_credentials():
-            messages.error(self.request, "Necesitas conectar Gmail antes de importar.")
+            messages.error(self.request, "Necesitas conectar al menos una cuenta de correo antes de importar.")
             return redirect("tracker:import")
-        years = int(form.cleaned_data["years"])
-        years = max(1, min(3, years))
-        after_date = timezone.now().date() - timedelta(days=365 * years)
-        manager = GmailCredentialManager(user_email=self.request.user.email, user=self.request.user)
+        range_choice = form.cleaned_data["years"]
+        after_date = self._resolve_after_date(range_choice, form)
+        gmail_query = f"{settings.GMAIL_SEARCH_QUERY} after:{after_date.strftime('%Y/%m/%d')}"
         try:
-            creds = manager.ensure_credentials()
-        except MissingCredentialsError:
-            messages.error(self.request, "Conecta tu Gmail nuevamente.")
+            call_command(
+                "sync_mailboxes",
+                user_email=self.request.user.email,
+                max=settings.GMAIL_MAX_MESSAGES_PER_SYNC,
+                gmail_query=gmail_query,
+                outlook_query=settings.OUTLOOK_SEARCH_QUERY,
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.exception("Mailbox sync failed during manual import")
+            messages.error(self.request, f"No se pudo sincronizar tus correos: {exc}")
             return redirect("tracker:import")
-
-        service = GmailCredentialManager.build_service(creds)
-        query = f"{settings.GMAIL_SEARCH_QUERY} after:{after_date.strftime('%Y/%m/%d')}"
-        ingestion = GmailIngestionService(
-            service=service,
-            user_email=self.request.user.email,
-            query=query,
-            label=f"user-{self.request.user.id}",
-            max_messages=settings.GMAIL_MAX_MESSAGES_PER_SYNC,
-            user=self.request.user,
-        )
-        result = ingestion.sync()
         processed = self._process_pending_emails()
         messages.success(
             self.request,
-            f"Importación completada. Correos nuevos: {result.created}. Transacciones procesadas: {processed}.",
+            f"Importación completada. Se procesaron {processed} transacciones nuevas.",
         )
         return super().form_valid(form)
 
@@ -1071,11 +1137,61 @@ class ImportTransactionsView(LoginRequiredMixin, FormView):
         return count
 
     def _has_credentials(self):
-        return models.GmailCredential.objects.filter(
-            user=self.request.user,
-            is_active=True,
-            user_email__iexact=self.request.user.email,
-        ).exists()
+        return models.EmailAccount.objects.filter(user=self.request.user, is_active=True).exists()
+
+    def _account_rows(self):
+        accounts = list(
+            models.EmailAccount.objects.filter(user=self.request.user)
+            .order_by("provider", "email_address")
+        )
+        if not accounts:
+            return []
+        states = {
+            state.account_id: state
+            for state in models.MailSyncState.objects.filter(account__in=accounts)
+        }
+        rows = []
+        for account in accounts:
+            state = states.get(account.id)
+            last_synced = state.last_synced_at if state else None
+            rows.append(
+                {
+                    "email": account.email_address,
+                    "label": account.label or account.email_address,
+                    "provider": account.get_provider_display(),
+                    "provider_key": account.provider,
+                    "last_synced_at": last_synced,
+                    "retry_count": state.retry_count if state else 0,
+                }
+            )
+        return rows
+
+    def _latest_transaction_datetime(self):
+        if hasattr(self, "_cached_latest_transaction"):
+            return self._cached_latest_transaction
+        latest = (
+            models.Transaction.objects.filter(user=self.request.user)
+            .order_by("-transaction_date", "-created_at")
+            .values_list("transaction_date", flat=True)
+            .first()
+        )
+        self._cached_latest_transaction = latest
+        return latest
+
+    def _resolve_after_date(self, range_choice, form):
+        today = timezone.now().date()
+        if range_choice == ImportForm.RECENT_CHOICE:
+            recent_start = form.recent_start_date
+            if recent_start:
+                # Gmail's `after:` filter is exclusive, so step one day back to include the last transaction day.
+                return recent_start - timedelta(days=1)
+            return today - timedelta(days=365)
+        try:
+            years = int(range_choice)
+        except (TypeError, ValueError):
+            years = 1
+        years = max(1, min(3, years))
+        return today - timedelta(days=365 * years)
 
 
 class GmailOAuthStartView(LoginRequiredMixin, View):
@@ -1113,6 +1229,96 @@ class GmailOAuthCallbackView(LoginRequiredMixin, View):
         manager = GmailCredentialManager(user_email=request.user.email, user=request.user)
         manager.save_credentials(flow.credentials)
         messages.success(request, "Cuenta de Gmail conectada correctamente.")
+        return redirect("tracker:import")
+
+
+class OutlookOAuthMixin:
+    scopes = settings.MS_GRAPH_SCOPES or ["https://graph.microsoft.com/Mail.Read"]
+
+    def _build_app(self):
+        client_id = settings.MS_GRAPH_CLIENT_ID
+        client_secret = settings.MS_GRAPH_CLIENT_SECRET
+        if not client_id or not client_secret:
+            raise ImproperlyConfigured("Configura MS_GRAPH_CLIENT_ID y MS_GRAPH_CLIENT_SECRET.")
+        authority = getattr(settings, "MS_GRAPH_TENANT_ID", "") or "common"
+        return msal.ConfidentialClientApplication(
+            client_id=client_id,
+            client_credential=client_secret,
+            authority=f"https://login.microsoftonline.com/{authority}",
+        )
+
+    def _redirect_uri(self, request):
+        return settings.MS_GRAPH_REDIRECT_URI or request.build_absolute_uri(
+            reverse("tracker:outlook_callback")
+        )
+
+
+class OutlookOAuthStartView(LoginRequiredMixin, OutlookOAuthMixin, View):
+    def get(self, request):
+        try:
+            app = self._build_app()
+        except ImproperlyConfigured as exc:
+            messages.error(request, str(exc))
+            return redirect("tracker:import")
+        state = secrets.token_urlsafe(32)
+        request.session["outlook_oauth_state"] = state
+        auth_url = app.get_authorization_request_url(
+            scopes=self.scopes,
+            state=state,
+            redirect_uri=self._redirect_uri(request),
+            prompt="select_account",
+        )
+        return redirect(auth_url)
+
+
+class OutlookOAuthCallbackView(LoginRequiredMixin, OutlookOAuthMixin, View):
+    def get(self, request):
+        expected_state = request.session.get("outlook_oauth_state")
+        incoming_state = request.GET.get("state")
+        if not expected_state or expected_state != incoming_state:
+            messages.error(request, "Sesión inválida al conectar Outlook. Intenta de nuevo.")
+            return redirect("tracker:import")
+        code = request.GET.get("code")
+        if not code:
+            messages.error(request, "Falta el código de autorización de Outlook.")
+            return redirect("tracker:import")
+        try:
+            app = self._build_app()
+        except ImproperlyConfigured as exc:
+            messages.error(request, str(exc))
+            return redirect("tracker:import")
+        result = app.acquire_token_by_authorization_code(
+            code,
+            scopes=self.scopes,
+            redirect_uri=self._redirect_uri(request),
+        )
+        if "access_token" not in result:
+            error = result.get("error_description") or "No se pudo conectar tu cuenta de Outlook."
+            messages.error(request, error)
+            return redirect("tracker:import")
+        requested_email = (
+            (result.get("id_token_claims") or {}).get("preferred_username")
+            or (result.get("id_token_claims") or {}).get("email")
+            or request.user.email
+        )
+        expires_in = int(result.get("expires_in") or 0)
+        expiry = timezone.now() + timedelta(seconds=expires_in) if expires_in else None
+        token_json = json.loads(json.dumps(result))
+        account, _ = models.EmailAccount.objects.update_or_create(
+            provider=models.EmailAccount.Provider.OUTLOOK,
+            email_address=requested_email,
+            defaults={
+                "user": request.user,
+                "label": requested_email,
+                "token_json": token_json,
+                "token_expiry": expiry,
+                "refresh_token": result.get("refresh_token") or "",
+                "scopes": self.scopes,
+                "is_active": True,
+            },
+        )
+        request.session.pop("outlook_oauth_state", None)
+        messages.success(request, f"Cuenta de Outlook conectada correctamente ({account.email_address}).")
         return redirect("tracker:import")
 
 

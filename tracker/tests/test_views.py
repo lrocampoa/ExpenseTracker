@@ -275,6 +275,36 @@ class TransactionViewsTests(TestCase):
         self.assertEqual(len(chart), 2)
         self.assertGreater(chart[0]["used_pct"], chart[1]["used_pct"])
 
+    def test_dashboard_spend_control_requires_budget(self):
+        response = self.client.get(reverse("tracker:dashboard"))
+        self.assertEqual(response.status_code, 200)
+        control = response.context["spend_control"]
+        self.assertFalse(control["has_budget"])
+        self.assertIsNone(control["daily_allowance"])
+        self.assertIsNone(control["status"])
+
+    def test_dashboard_spend_control_with_budget(self):
+        self.category.budget_limit = Decimal("500.00")
+        self.category.save(update_fields=["budget_limit"])
+        now = timezone.now()
+        models.Transaction.objects.create(
+            email=self.email,
+            user=self.user,
+            category=self.category,
+            amount=Decimal("250.00"),
+            currency_code="CRC",
+            transaction_date=now - timedelta(days=3),
+            reference_id="control-budget",
+        )
+        response = self.client.get(reverse("tracker:dashboard"))
+        self.assertEqual(response.status_code, 200)
+        control = response.context["spend_control"]
+        self.assertTrue(control["has_budget"])
+        self.assertEqual(control["total_budget"], Decimal("500.00"))
+        self.assertEqual(control["spent"], response.context["hero"]["total_spend"])
+        self.assertEqual(control["status"], "on_track")
+        self.assertLess(control["projected_total"], control["total_budget"])
+
     def test_promote_rule_creates_category_rule(self):
         self.transaction.card_last4 = "7777"
         self.transaction.save(update_fields=["card_last4"])
@@ -423,21 +453,18 @@ class TransactionViewsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Test Merchant")
 
-    def test_import_page_without_credentials(self):
-        url = reverse("tracker:import")
-        response = self.client.get(url)
-        self.assertContains(response, "Conectar Gmail")
-
     def test_import_post_without_credentials(self):
         url = reverse("tracker:import")
         response = self.client.post(url, {"years": 1}, follow=True)
-        self.assertContains(response, "Necesitas conectar Gmail")
+        self.assertContains(response, "Necesitas conectar al menos una cuenta de correo")
 
     @override_settings(LLM_CATEGORIZATION_ENABLED=False)
-    def test_import_runs_ingestion_and_processing(self):
-        models.GmailCredential.objects.create(
+    @mock.patch("tracker.views.call_command")
+    def test_import_runs_ingestion_and_processing(self, mock_call_command):
+        models.EmailAccount.objects.create(
             user=self.user,
-            user_email=self.user.email,
+            provider=models.EmailAccount.Provider.GMAIL,
+            email_address=self.user.email,
             token_json={"token": "abc"},
             scopes=["test"],
             is_active=True,
@@ -450,14 +477,10 @@ class TransactionViewsTests(TestCase):
             user=self.user,
         )
         import_path = reverse("tracker:import")
-        with mock.patch(
-            "tracker.views.GmailCredentialManager.ensure_credentials", return_value=object()
-        ), mock.patch("tracker.views.GmailCredentialManager.build_service"), mock.patch(
-            "tracker.views.GmailIngestionService.sync"
-        ) as sync_mock:
-            sync_mock.return_value.created = 0
-            response = self.client.post(import_path, {"years": 1}, follow=True)
+        mock_call_command.return_value = None
+        response = self.client.post(import_path, {"years": 1}, follow=True)
         self.assertEqual(response.status_code, 200)
+        mock_call_command.assert_called_once()
         email.refresh_from_db()
         self.assertIsNotNone(email.processed_at)
 
@@ -617,11 +640,18 @@ class TransactionViewsTests(TestCase):
         )
 
     def test_dashboard_sync_health_flags_stale_states(self):
-        models.GmailSyncState.objects.create(
+        account = models.EmailAccount.objects.create(
             user=self.user,
+            provider=models.EmailAccount.Provider.GMAIL,
+            email_address=self.user.email,
+            token_json={"token": "abc"},
+        )
+        models.MailSyncState.objects.create(
+            user=self.user,
+            account=account,
+            provider=account.provider,
             label="primary",
-            user_email=self.user.email,
-            history_id="abc",
+            checkpoint={"history_id": "abc"},
             last_synced_at=timezone.now() - timedelta(hours=2),
             fetched_messages=10,
             retry_count=3,
@@ -636,3 +666,46 @@ class TransactionViewsTests(TestCase):
         self.assertEqual(sync_health["states"][0]["retry_count"], 3)
         self.assertTrue(sync_health["states"][0]["is_stale"])
         self.assertEqual(sync_health["stale_labels"], ["primary"])
+
+    @override_settings(MS_GRAPH_CLIENT_ID="cid", MS_GRAPH_CLIENT_SECRET="secret")
+    @mock.patch("tracker.views.msal.ConfidentialClientApplication")
+    def test_outlook_oauth_start_redirects(self, mock_app):
+        instance = mock_app.return_value
+        instance.get_authorization_request_url.return_value = "https://login.microsoftonline.com/auth"
+        response = self.client.get(reverse("tracker:outlook_connect"))
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("outlook_oauth_state", self.client.session)
+
+    @override_settings(MS_GRAPH_CLIENT_ID="cid", MS_GRAPH_CLIENT_SECRET="secret")
+    @mock.patch("tracker.views.msal.ConfidentialClientApplication")
+    def test_outlook_oauth_callback_creates_account(self, mock_app):
+        instance = mock_app.return_value
+        instance.acquire_token_by_authorization_code.return_value = {
+            "access_token": "abc",
+            "refresh_token": "refresh",
+            "expires_in": 3600,
+            "id_token_claims": {"preferred_username": "outlook@example.com"},
+        }
+        session = self.client.session
+        session["outlook_oauth_state"] = "abc123"
+        session.save()
+        response = self.client.get(
+            reverse("tracker:outlook_callback"),
+            {"code": "authcode", "state": "abc123"},
+            follow=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(
+            models.EmailAccount.objects.filter(
+                provider=models.EmailAccount.Provider.OUTLOOK, email_address="outlook@example.com"
+            ).exists()
+        )
+
+    def test_outlook_oauth_callback_invalid_state(self):
+        response = self.client.get(
+            reverse("tracker:outlook_callback"),
+            {"code": "authcode", "state": "mismatch"},
+            follow=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Sesión inválida al conectar Outlook")

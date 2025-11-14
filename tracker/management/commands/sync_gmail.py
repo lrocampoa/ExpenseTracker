@@ -1,6 +1,7 @@
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 
+from tracker import models
 from tracker.services.gmail import (
     GmailCredentialManager,
     GmailIngestionService,
@@ -42,7 +43,15 @@ class Command(BaseCommand):
         if not user_email:
             raise CommandError("Provide --email or set GMAIL_USER_EMAIL in the environment.")
 
-        manager = GmailCredentialManager(user_email=user_email)
+        account = (
+            models.EmailAccount.objects.filter(
+                provider=models.EmailAccount.Provider.GMAIL,
+                email_address__iexact=user_email,
+            )
+            .select_related("user")
+            .first()
+        )
+        manager = GmailCredentialManager(user_email=user_email, user=getattr(account, "user", None), account=account)
         try:
             creds = manager.ensure_credentials(allow_interactive=interactive)
         except MissingCredentialsError as exc:
@@ -51,11 +60,10 @@ class Command(BaseCommand):
         service = GmailCredentialManager.build_service(creds)
         ingestion = GmailIngestionService(
             service=service,
-            user_email=manager.user_email,
+            account=manager.account,
             query=query,
             label=label,
             max_messages=max_messages,
-            user=getattr(manager, "user", None),
         )
         result = ingestion.sync()
         self.stdout.write(

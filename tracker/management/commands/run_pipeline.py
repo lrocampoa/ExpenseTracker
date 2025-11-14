@@ -3,7 +3,7 @@ from django.core.management import BaseCommand, call_command
 
 class Command(BaseCommand):
     help = (
-        "Run the ingestion pipeline: Gmail sync, parse/process emails, and categorize transactions."
+        "Run the ingestion pipeline: mailbox sync, parse/process emails, and categorize transactions."
     )
 
     def add_arguments(self, parser):
@@ -37,11 +37,11 @@ class Command(BaseCommand):
         limit = options["limit"]
         user_email = options.get("user_email")
         if not options["skip_sync"]:
-            self.stdout.write(self.style.NOTICE("[1/3] Syncing Gmail..."))
+            self.stdout.write(self.style.NOTICE("[1/3] Syncing mailboxes..."))
             cmd_args = {}
             if user_email:
-                cmd_args["email"] = user_email
-            call_command("sync_gmail", **cmd_args)
+                cmd_args["user_email"] = user_email
+            call_command("sync_mailboxes", **cmd_args)
         if not options["skip_parse"]:
             self.stdout.write(self.style.NOTICE("[2/3] Processing emails..."))
             cmd_args = {"limit": limit}
