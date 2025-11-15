@@ -12,9 +12,10 @@ from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.exceptions import ImproperlyConfigured
-from django.core.management import call_command
+from django.db import transaction as db_transaction
 from django.db.models import Avg, Count, Max, Q, Sum
 from django.db.models.functions import TruncMonth
+from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse, reverse_lazy
 from django.utils import timezone
@@ -43,6 +44,7 @@ from tracker.forms import (
 from tracker.services import account_seeding
 from tracker.services import category_seeding
 from tracker.services import corrections as correction_service
+from tracker.services import import_jobs as import_jobs_service
 from tracker.services import parser as parser_service
 from tracker.services import rule_seeding
 from tracker.services import rule_suggestions
@@ -1138,44 +1140,41 @@ class ImportTransactionsView(LoginRequiredMixin, FormView):
         context["gmail_connect_url"] = reverse("tracker:gmail_connect")
         context["outlook_connect_url"] = reverse("tracker:outlook_connect")
         context["last_transaction_date"] = self._latest_transaction_datetime()
+        active_job = self._active_job()
+        context["active_import_job"] = active_job
+        context["recent_import_jobs"] = self._recent_jobs()
+        if active_job:
+            context["import_job_status_url"] = reverse(
+                "tracker:import_job_status", kwargs={"pk": active_job.pk}
+            )
+            context["import_job_poll_interval_ms"] = 4000
         return context
 
     def form_valid(self, form):
         if not self._has_credentials():
             messages.error(self.request, "Necesitas conectar al menos una cuenta de correo antes de importar.")
             return redirect("tracker:import")
+        active_job = self._active_job()
+        if active_job and active_job.is_active:
+            messages.info(self.request, "Ya hay una importación en progreso. Espera a que termine antes de iniciar otra.")
+            return redirect("tracker:import")
         range_choice = form.cleaned_data["years"]
         after_date = self._resolve_after_date(range_choice, form)
         gmail_query = f"{settings.GMAIL_SEARCH_QUERY} after:{after_date.strftime('%Y/%m/%d')}"
-        try:
-            call_command(
-                "sync_mailboxes",
-                user_email=self.request.user.email,
-                max=settings.GMAIL_MAX_MESSAGES_PER_SYNC,
-                gmail_query=gmail_query,
-                outlook_query=settings.OUTLOOK_SEARCH_QUERY,
-            )
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.exception("Mailbox sync failed during manual import")
-            messages.error(self.request, f"No se pudo sincronizar tus correos: {exc}")
-            return redirect("tracker:import")
-        processed = self._process_pending_emails()
-        messages.success(
-            self.request,
-            f"Importación completada. Se procesaron {processed} transacciones nuevas.",
-        )
-        return super().form_valid(form)
-
-    def _process_pending_emails(self):
-        pending = models.EmailMessage.objects.filter(
+        job = models.ImportJob.objects.create(
             user=self.request.user,
-            processed_at__isnull=True,
-        ).order_by("-internal_date")[: settings.GMAIL_MAX_MESSAGES_PER_SYNC]
-        count = 0
-        for email in pending:
-            if parser_service.create_transaction_from_email(email):
-                count += 1
-        return count
+            range_choice=str(range_choice),
+            after_date=after_date,
+            gmail_query=gmail_query,
+            outlook_query=settings.OUTLOOK_SEARCH_QUERY,
+            max_messages=settings.GMAIL_MAX_MESSAGES_PER_SYNC,
+        )
+        db_transaction.on_commit(lambda job_id=job.pk: import_jobs_service.enqueue_job(job_id))
+        messages.info(
+            self.request,
+            "Importación en progreso. Puedes navegar mientras terminamos de sincronizar tus correos.",
+        )
+        return redirect("tracker:import")
 
     def _has_credentials(self):
         return models.EmailAccount.objects.filter(user=self.request.user, is_active=True).exists()
@@ -1219,6 +1218,25 @@ class ImportTransactionsView(LoginRequiredMixin, FormView):
         self._cached_latest_transaction = latest
         return latest
 
+    def _active_job(self):
+        if hasattr(self, "_cached_active_job"):
+            return self._cached_active_job
+        job = (
+            models.ImportJob.objects.filter(
+                user=self.request.user,
+                status__in=models.ImportJob.ACTIVE_STATUSES,
+            )
+            .order_by("-created_at")
+            .first()
+        )
+        self._cached_active_job = job
+        return job
+
+    def _recent_jobs(self):
+        return list(
+            models.ImportJob.objects.filter(user=self.request.user).order_by("-created_at")[:5]
+        )
+
     def _resolve_after_date(self, range_choice, form):
         today = timezone.now().date()
         if range_choice == ImportForm.RECENT_CHOICE:
@@ -1233,6 +1251,33 @@ class ImportTransactionsView(LoginRequiredMixin, FormView):
             years = 1
         years = max(1, min(3, years))
         return today - timedelta(days=365 * years)
+
+
+class ImportJobStatusView(LoginRequiredMixin, View):
+    def get(self, request, pk):
+        job = get_object_or_404(models.ImportJob, pk=pk, user=request.user)
+        data = {
+            "id": str(job.pk),
+            "status": job.status,
+            "status_display": job.get_status_display(),
+            "progress_percent": job.progress_percent,
+            "fetched_count": job.fetched_count,
+            "processed_total": job.processed_total,
+            "processed_messages": job.processed_messages,
+            "created_transactions": job.created_transactions,
+            "error_count": job.error_count,
+            "is_finished": not job.is_active,
+            "started_at": self._isoformat(job.started_at),
+            "finished_at": self._isoformat(job.finished_at),
+            "last_progress_at": self._isoformat(job.last_progress_at),
+            "error_message": job.error_message,
+        }
+        return JsonResponse(data)
+
+    def _isoformat(self, value):
+        if not value:
+            return None
+        return timezone.localtime(value).isoformat()
 
 
 class GmailOAuthStartView(LoginRequiredMixin, View):

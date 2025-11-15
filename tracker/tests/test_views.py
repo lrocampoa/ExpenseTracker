@@ -483,10 +483,15 @@ class TransactionViewsTests(TestCase):
         url = reverse("tracker:import")
         response = self.client.post(url, {"years": 1}, follow=True)
         self.assertContains(response, "Necesitas conectar al menos una cuenta de correo")
+        self.assertFalse(models.ImportJob.objects.exists())
 
     @override_settings(LLM_CATEGORIZATION_ENABLED=False)
-    @mock.patch("tracker.views.call_command")
-    def test_import_runs_ingestion_and_processing(self, mock_call_command):
+    @mock.patch(
+        "tracker.views.db_transaction.on_commit",
+        side_effect=lambda func, *args, **kwargs: func(),
+    )
+    @mock.patch("tracker.views.import_jobs_service.enqueue_job")
+    def test_import_enqueues_async_job(self, mock_enqueue_job, mock_on_commit):
         models.EmailAccount.objects.create(
             user=self.user,
             provider=models.EmailAccount.Provider.GMAIL,
@@ -495,20 +500,42 @@ class TransactionViewsTests(TestCase):
             scopes=["test"],
             is_active=True,
         )
-        email = models.EmailMessage.objects.create(
-            gmail_message_id="newmsg",
-            subject="Notificación",
-            sender="notificacion@baccr.com",
-            raw_body="<table><tr><td>Comercio:</td><td>Test Store</td></tr><tr><td>Monto:</td><td>CRC 100.00</td></tr><tr><td>Autorización:</td><td>CODE1</td></tr><tr><td>Fecha:</td><td>09/11/2025 10:00</td></tr><tr><td>**** 1234</td></tr></table>",
-            user=self.user,
-        )
         import_path = reverse("tracker:import")
-        mock_call_command.return_value = None
         response = self.client.post(import_path, {"years": 1}, follow=True)
         self.assertEqual(response.status_code, 200)
-        mock_call_command.assert_called_once()
-        email.refresh_from_db()
-        self.assertIsNotNone(email.processed_at)
+        self.assertContains(response, "Importación en progreso")
+        job = models.ImportJob.objects.get(user=self.user)
+        mock_enqueue_job.assert_called_once_with(job.pk)
+        mock_on_commit.assert_called()
+        self.assertIn("after:", job.gmail_query)
+
+    def test_import_job_status_endpoint(self):
+        job = models.ImportJob.objects.create(
+            user=self.user,
+            gmail_query="from:test",
+            outlook_query="from:test",
+            max_messages=10,
+        )
+        url = reverse("tracker:import_job_status", args=[job.pk])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["id"], str(job.pk))
+        self.assertEqual(payload["status"], job.status)
+
+    def test_import_job_status_rejects_other_users(self):
+        other = get_user_model().objects.create_user(
+            username="other", email="other@example.com", password="12345"
+        )
+        job = models.ImportJob.objects.create(
+            user=other,
+            gmail_query="from:test",
+            outlook_query="from:test",
+            max_messages=10,
+        )
+        url = reverse("tracker:import_job_status", args=[job.pk])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 404)
 
     def test_card_list_includes_transaction_last4(self):
         self.transaction.card_last4 = "4321"

@@ -28,29 +28,35 @@ docker build -t expense-tracker .
 Run it (using SQLite and DB migrations for quick testing):
 
 ```bash
-docker run --env-file .env -p 8000:8000 expense-tracker \
-  sh -c "python manage.py migrate && gunicorn config.wsgi:application --bind 0.0.0.0:8000"
+docker run --env-file .env -p 8000:8000 expense-tracker
 ```
 
-For production (Render), the Dockerfile already uses `gunicorn` as the default CMD. Render lets you override the start command if you need to run migrations first (e.g. `python manage.py migrate && gunicorn ...`).
+The container now runs migrations and `collectstatic` automatically before launching `gunicorn`. You can still override the command (e.g. `docker run ... python manage.py shell`) and the entrypoint will execute it after migrations.
 
 ## 3. Render setup
 
 1. **Web Service**  
    - Type: Web Service (Docker, free or $7 Starter).  
    - Build command: `docker build -t expense-tracker .` (handled automatically).  
-   - Start command: `python manage.py migrate && gunicorn config.wsgi:application --bind 0.0.0.0:$PORT`.
+   - Start command: keep Render’s default; the entrypoint already calls `gunicorn` with `--bind 0.0.0.0:$PORT`.
    - Add environment variables from `.env`. Use Render’s free Postgres first; upgrade later if needed.
+   - Tune `WEB_CONCURRENCY`, `GUNICORN_THREADS`, and `GUNICORN_TIMEOUT` environment variables (defaults: 2 workers, 1 thread, 120 s). Increase `GUNICORN_TIMEOUT` if manual imports need more than 30 s, or schedule imports outside the request/response cycle.
+   - Set `GMAIL_MAX_MESSAGES_PER_SYNC`/`OUTLOOK_MAX_MESSAGES_PER_SYNC` to conservative values (25–50) so manual imports finish inside the gunicorn timeout. Use scheduled jobs for large backfills.
 
 2. **Database**  
    - Add Render Postgres (free tier). Copy the connection string into `DATABASE_URL`.
 
-3. **Cron Job / Scheduled Task**  
-   - Add a Render Cron Job (free) with command:
-     ```
-     python manage.py run_scheduled_pipelines --limit 100
-     ```
-   - Run it every 15 or 30 minutes. The new management command will find all active users with linked mailboxes and invoke the standard `run_pipeline` for each. You can pass `--max-users` when testing.
+3. **Cron Jobs / Scheduled Tasks**  
+   1. **Pipelines refresher** – add a cron job with:
+      ```
+      python manage.py run_scheduled_pipelines --limit 100
+      ```
+      Run it every 15–30 minutes so every user mailbox gets synced regularly.
+   2. **Manual import queue** – add a second cron job for:
+      ```
+      python manage.py process_import_jobs
+      ```
+      Run it every 5 minutes (or faster) so `ImportJob`s created from `/importar/` are processed even if the web dyno restarts. The command will exit quickly when there are no jobs in queue.
 
 4. **Google secrets**  
    - Upload the OAuth client JSON as a Render secret file or recreate credentials using environment variables. Make sure `GOOGLE_OAUTH_CLIENT_SECRET_PATH` matches the location inside the container (e.g. `/etc/secrets/google_client.json`).

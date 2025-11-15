@@ -10,6 +10,11 @@ urlpatterns = [
     path("revisar/", views.ReviewQueueView.as_view(), name="review_queue"),
     path("transactions/<int:pk>/", views.TransactionDetailView.as_view(), name="transaction_detail"),
     path("importar/", views.ImportTransactionsView.as_view(), name="import"),
+    path(
+        "import-jobs/<uuid:pk>/status/",
+        views.ImportJobStatusView.as_view(),
+        name="import_job_status",
+    ),
     path("importar/conectar/", views.GmailOAuthStartView.as_view(), name="gmail_connect"),
     path("import/callback/", views.GmailOAuthCallbackView.as_view(), name="gmail_callback"),
     path("outlook/connect/", views.OutlookOAuthStartView.as_view(), name="outlook_connect"),

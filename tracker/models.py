@@ -1,8 +1,9 @@
 from typing import Optional
+from uuid import uuid4
 
 from django.conf import settings
 from django.db import models
-from django.db.models import Q
+from django.db.models import F, Q
 from django.utils import timezone
 
 
@@ -378,6 +379,130 @@ class MailSyncState(TimeStampedModel):
         return str(history_id) if history_id else None
 
 
+class ImportJob(TimeStampedModel):
+    class Status(models.TextChoices):
+        QUEUED = ("queued", "En cola")
+        SYNCING = ("syncing", "Sincronizando correos")
+        PROCESSING = ("processing", "Procesando transacciones")
+        COMPLETED = ("completed", "Completado")
+        FAILED = ("failed", "Con errores")
+
+    ACTIVE_STATUSES = {Status.QUEUED, Status.SYNCING, Status.PROCESSING}
+
+    id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="import_jobs",
+    )
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.QUEUED)
+    range_choice = models.CharField(max_length=16, blank=True)
+    after_date = models.DateField(null=True, blank=True)
+    gmail_query = models.TextField(blank=True)
+    outlook_query = models.TextField(blank=True)
+    max_messages = models.PositiveIntegerField(default=50)
+    fetched_count = models.PositiveIntegerField(default=0)
+    processed_total = models.PositiveIntegerField(default=0)
+    processed_messages = models.PositiveIntegerField(default=0)
+    created_transactions = models.PositiveIntegerField(default=0)
+    error_count = models.PositiveIntegerField(default=0)
+    error_message = models.TextField(blank=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    last_progress_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta(TimeStampedModel.Meta):
+        ordering = ("-created_at",)
+
+    def __str__(self) -> str:
+        return f"ImportJob {self.pk} ({self.get_status_display()})"
+
+    @property
+    def is_active(self) -> bool:
+        return self.status in self.ACTIVE_STATUSES
+
+    @property
+    def progress_percent(self) -> int:
+        if self.status == self.Status.QUEUED:
+            return 5
+        if self.status == self.Status.SYNCING:
+            return 25
+        if self.status == self.Status.PROCESSING:
+            if self.processed_total:
+                return min(
+                    99,
+                    max(30, int((self.processed_messages / self.processed_total) * 70 + 30)),
+                )
+            return 35
+        return 100
+
+    def mark_syncing(self):
+        now = timezone.now()
+        updates = {
+            "status": self.Status.SYNCING,
+            "started_at": self.started_at or now,
+            "last_progress_at": now,
+            "error_message": "",
+        }
+        self._apply_updates(updates)
+
+    def mark_processing(self, total_messages: int):
+        now = timezone.now()
+        updates = {
+            "status": self.Status.PROCESSING,
+            "processed_total": total_messages,
+            "fetched_count": max(self.fetched_count, total_messages),
+            "last_progress_at": now,
+            "processed_messages": 0,
+            "created_transactions": 0,
+            "error_count": 0,
+        }
+        self._apply_updates(updates)
+
+    def mark_completed(self):
+        now = timezone.now()
+        updates = {
+            "status": self.Status.COMPLETED,
+            "finished_at": now,
+            "last_progress_at": now,
+        }
+        self._apply_updates(updates)
+
+    def mark_failed(self, message: str):
+        now = timezone.now()
+        updates = {
+            "status": self.Status.FAILED,
+            "finished_at": now,
+            "last_progress_at": now,
+            "error_message": message[:2000],
+        }
+        self._apply_updates(updates)
+
+    def increment_processed(self, created: bool = False, errored: bool = False):
+        updates = {
+            "processed_messages": F("processed_messages") + 1,
+            "last_progress_at": timezone.now(),
+        }
+        if created:
+            updates["created_transactions"] = F("created_transactions") + 1
+        if errored:
+            updates["error_count"] = F("error_count") + 1
+        self.__class__.objects.filter(pk=self.pk).update(**updates)
+        self.refresh_from_db(
+            fields=[
+                "processed_messages",
+                "created_transactions",
+                "error_count",
+                "last_progress_at",
+            ]
+        )
+
+    def _apply_updates(self, updates: dict):
+        for field, value in updates.items():
+            setattr(self, field, value)
+        self.save(update_fields=list(updates.keys()) + ["updated_at"])
+
+
 class EmailMessage(TimeStampedModel):
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -514,6 +639,22 @@ class Transaction(TimeStampedModel):
         if not message_id:
             return ""
         return f"https://mail.google.com/mail/u/0/#all/{message_id}"
+
+    @property
+    def source_email_address(self) -> str:
+        """Return a friendly email address for the source mailbox."""
+
+        if not self.email:
+            return ""
+
+        if self.email.mailbox_email:
+            return self.email.mailbox_email
+
+        account = self.email.account
+        if account and account.email_address:
+            return account.email_address
+
+        return ""
 
 
 class LLMDecisionLog(TimeStampedModel):

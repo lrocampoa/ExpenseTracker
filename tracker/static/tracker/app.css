@@ -362,39 +362,117 @@ body {
 }
 
 .transaction-item {
-  border: 1px solid rgba(226, 232, 240, 0.9);
-  border-radius: 1rem;
-  padding: 1rem;
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 0.5rem;
-  transition: transform 0.15s ease, box-shadow 0.15s ease;
-  background: #fff;
+  border: 1px solid rgba(226, 232, 240, 0.6);
+  border-radius: 1.25rem;
+  padding: 1.25rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+  background: linear-gradient(180deg, #fff 0%, rgba(249, 250, 251, 0.9) 100%);
+  box-shadow: 0 10px 25px rgba(15, 23, 42, 0.05);
+  position: relative;
+  overflow: hidden;
 }
 
 .transaction-item:hover {
   transform: translateY(-2px);
-  box-shadow: 0 12px 20px rgba(15, 23, 42, 0.12);
+  border-color: rgba(59, 130, 246, 0.2);
+  box-shadow: 0 18px 30px rgba(15, 23, 42, 0.12);
 }
 
-.transaction-info h3 {
+.transaction-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.email-source {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  min-width: 0;
+}
+
+.provider-logo {
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  background: rgba(148, 163, 184, 0.2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5);
+  background-size: 28px;
+  background-repeat: no-repeat;
+  background-position: center;
+}
+
+.provider-logo--gmail {
+  background-color: #fef2f2;
+  background-image: url("icons/email-gmail.svg");
+}
+
+.provider-logo--outlook {
+  background-color: #eff6ff;
+  background-image: url("icons/email-outlook.svg");
+}
+
+.provider-logo--generic {
+  background-image: url("icons/email-generic.svg");
+}
+
+.email-source-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.email-address {
+  margin: 0;
+  font-weight: 600;
+  color: var(--text);
+  font-size: 0.95rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.email-provider {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.transaction-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.transaction-merchant {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.transaction-merchant h3 {
   margin: 0;
   font-size: 1.05rem;
 }
 
-.actions-inline {
-  margin-top: 0.35rem;
-}
-
-.btn-link {
-  font-size: 0.85rem;
-  color: var(--primary);
+.transaction-merchant a {
+  color: inherit;
   text-decoration: none;
-  font-weight: 600;
 }
 
-.btn-link:hover {
-  text-decoration: underline;
+.transaction-merchant a:hover {
+  color: var(--primary);
 }
 
 .badges {
@@ -419,10 +497,27 @@ body {
 
 .transaction-amount {
   text-align: right;
+  min-width: 160px;
 }
 
 .transaction-amount strong {
   font-size: 1.2rem;
+}
+
+.transaction-date {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.transaction-description {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.email-preview {
+  margin-top: 0.25rem;
 }
 
 .email-preview summary {
@@ -461,6 +556,19 @@ body {
   background: var(--primary);
   color: white;
   border-color: var(--primary);
+}
+
+@media (max-width: 640px) {
+  .transaction-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.75rem;
+  }
+
+  .transaction-amount {
+    text-align: left;
+    width: 100%;
+  }
 }
 
 .transaction-detail-card {

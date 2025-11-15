@@ -18,6 +18,32 @@
     </a>
   </div>
 
+  {% if active_import_job %}
+    <div class="import-progress" data-import-job-status data-status-url="{{ import_job_status_url }}" data-refresh-ms="{{ import_job_poll_interval_ms }}">
+      <div class="progress-header">
+        <strong>Importación en curso</strong>
+        <span class="status-pill" data-import-status>{{ active_import_job.get_status_display }}</span>
+      </div>
+      <div class="progress-track">
+        <div class="progress-value" data-import-progress style="width: {{ active_import_job.progress_percent }}%"></div>
+      </div>
+      <p class="progress-metrics">
+        Procesados <span data-import-processed>{{ active_import_job.processed_messages }}</span> /
+        <span data-import-total>{{ active_import_job.processed_total }}</span> mensajes ·
+        Nuevas transacciones: <span data-import-created>{{ active_import_job.created_transactions }}</span> ·
+        Errores: <span data-import-errors>{{ active_import_job.error_count }}</span>
+      </p>
+      <p class="progress-updated">
+        Actualizado {{ active_import_job.last_progress_at|date:"H:i:s" }}
+      </p>
+      {% if active_import_job.error_message %}
+        <p class="text-danger" data-import-error>{{ active_import_job.error_message }}</p>
+      {% else %}
+        <p class="text-danger" data-import-error hidden></p>
+      {% endif %}
+    </div>
+  {% endif %}
+
   {% if accounts %}
     <div class="mailbox-list">
       <h3>Cuentas conectadas</h3>
@@ -55,12 +81,118 @@
           Última transacción importada el {{ form.recent_start_date|date:"d/m/Y" }}. Elige la primera opción para traer solo lo que falta hasta hoy.
         </p>
       {% endif %}
-      <button type="submit" class="btn btn-primary">Importar ahora</button>
+      <button type="submit" class="btn btn-primary" {% if active_import_job and active_import_job.is_active %}disabled{% endif %}>
+        {% if active_import_job and active_import_job.is_active %}
+          Importación en progreso…
+        {% else %}
+          Importar ahora
+        {% endif %}
+      </button>
+      {% if active_import_job and active_import_job.is_active %}
+        <p class="form-hint">Espera a que finalice la importación actual para lanzar otra.</p>
+      {% endif %}
     </form>
+    {% if recent_import_jobs %}
+      <div class="import-history">
+        <h3>Historial reciente</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Fecha</th>
+              <th>Estado</th>
+              <th>Procesados</th>
+              <th>Nuevas transacciones</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for job in recent_import_jobs %}
+              <tr>
+                <td>{{ job.created_at|date:"d/m H:i" }}</td>
+                <td>{{ job.get_status_display }}</td>
+                <td>{{ job.processed_messages }}/{{ job.processed_total }}</td>
+                <td>{{ job.created_transactions }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endif %}
   {% else %}
     <div class="alert alert-warning">
       Necesitas conectar al menos una cuenta de correo antes de importar.
     </div>
   {% endif %}
 </section>
+{% endblock %}
+
+{% block extra_scripts %}
+  {{ block.super }}
+  <script>
+    (function () {
+      const container = document.querySelector("[data-import-job-status]");
+      if (!container) {
+        return;
+      }
+      const statusUrl = container.getAttribute("data-status-url");
+      const refreshMs = parseInt(container.getAttribute("data-refresh-ms") || "4000", 10);
+      const statusLabel = container.querySelector("[data-import-status]");
+      const progressBar = container.querySelector("[data-import-progress]");
+      const processedEl = container.querySelector("[data-import-processed]");
+      const totalEl = container.querySelector("[data-import-total]");
+      const createdEl = container.querySelector("[data-import-created]");
+      const errorsEl = container.querySelector("[data-import-errors]");
+      const errorBox = container.querySelector("[data-import-error]");
+      const updatedEl = container.querySelector(".progress-updated");
+
+      const poll = () => {
+        fetch(statusUrl, {headers: {"Accept": "application/json"}})
+          .then((response) => response.ok ? response.json() : null)
+          .then((payload) => {
+            if (!payload) {
+              return;
+            }
+            statusLabel.textContent = payload.status_display;
+            if (progressBar) {
+              const pct = typeof payload.progress_percent === "number" ? payload.progress_percent : 0;
+              progressBar.style.width = pct + "%";
+            }
+            if (processedEl) {
+              processedEl.textContent = payload.processed_messages;
+            }
+            if (totalEl) {
+              totalEl.textContent = payload.processed_total;
+            }
+            if (createdEl) {
+              createdEl.textContent = payload.created_transactions;
+            }
+            if (errorsEl) {
+              errorsEl.textContent = payload.error_count;
+            }
+            if (updatedEl) {
+              const stamp = payload.last_progress_at || payload.finished_at || payload.started_at;
+              if (stamp) {
+                const dt = new Date(stamp);
+                updatedEl.textContent = (payload.is_finished ? "Finalizado " : "Actualizado ") + dt.toLocaleTimeString();
+              }
+            }
+            if (errorBox) {
+              if (payload.error_message) {
+                errorBox.textContent = payload.error_message;
+                errorBox.hidden = false;
+              } else {
+                errorBox.hidden = true;
+                errorBox.textContent = "";
+              }
+            }
+            if (!payload.is_finished) {
+              window.setTimeout(poll, refreshMs);
+            }
+          })
+          .catch(() => {
+            window.setTimeout(poll, refreshMs * 2);
+          });
+      };
+      poll();
+    })();
+  </script>
 {% endblock %}

@@ -37,6 +37,8 @@ def create_rule_from_transaction(
         "match_value": merchant,
         "category": trx.category,
     }
+    if getattr(trx, "subcategory", None):
+        rule_kwargs["subcategory"] = trx.subcategory
     if include_card_last4 and trx.card_last4:
         rule_kwargs["card_last4"] = trx.card_last4
     if hasattr(models.CategoryRule, "user_id") and user:
@@ -47,6 +49,8 @@ def create_rule_from_transaction(
         "match_type": rule_kwargs["match_type"],
         "match_value": rule_kwargs["match_value"],
     }
+    if "subcategory" in rule_kwargs:
+        filters["subcategory"] = rule_kwargs["subcategory"]
     if include_card_last4 and trx.card_last4:
         filters["card_last4"] = trx.card_last4
     if hasattr(models.CategoryRule, "user_id") and user:

@@ -115,14 +115,32 @@
   <div class="transactions-list">
     {% for transaction in transactions %}
     <article class="transaction-item">
-      <div class="transaction-info">
-        <h3>
-          <a href="{% url 'tracker:transaction_detail' transaction.pk %}">
-            {{ transaction.merchant_name|default:'(sin comercio)' }}
-          </a>
-        </h3>
-        <div class="actions-inline">
-          <a class="btn-link" href="{% url 'tracker:transaction_detail' transaction.pk %}?edit=1">Editar</a>
+      <div class="transaction-header">
+        <div class="email-source">
+          <span
+            class="provider-logo provider-logo--generic provider-logo--{{ transaction.email.provider|default:'generic' }}"
+            aria-hidden="true"
+          ></span>
+          <div class="email-source-text">
+            <p class="email-address">{{ transaction.source_email_address|default:'Sin correo vinculado' }}</p>
+            <p class="email-provider">{{ transaction.email.get_provider_display|default:'Correo' }}</p>
+          </div>
+        </div>
+        <div class="transaction-amount">
+          <strong>{{ transaction.amount|default:0|format_number }} {{ transaction.currency_code }}</strong>
+          <p class="muted">Ref: {{ transaction.reference_id|default:'-' }}</p>
+        </div>
+      </div>
+      <div class="transaction-body">
+        <div class="transaction-merchant">
+          <h3>
+            <a href="{% url 'tracker:transaction_detail' transaction.pk %}">
+              {{ transaction.merchant_name|default:'(sin comercio)' }}
+            </a>
+          </h3>
+          {% if transaction.transaction_date %}
+          <p class="transaction-date">{{ transaction.transaction_date|date:'d M Y H:i' }}</p>
+          {% endif %}
         </div>
         <div class="badges">
           {% if transaction.category %}
@@ -134,21 +152,14 @@
           {% if transaction.card_last4 %}
           <span class="badge badge-muted">**** {{ transaction.card_last4 }}</span>
           {% endif %}
-          {% if transaction.transaction_date %}
-          <span class="badge badge-muted">{{ transaction.transaction_date|date:'d M Y H:i' }}</span>
-          {% endif %}
         </div>
-        <p class="muted">{{ transaction.description|default:'Sin descripción' }}</p>
+        <p class="transaction-description">{{ transaction.description|default:'Sin descripción' }}</p>
         {% if transaction.email %}
         <details class="email-preview">
           <summary>Ver mensaje original</summary>
           <div class="email-body">{{ transaction.email.raw_body|safe }}</div>
         </details>
         {% endif %}
-      </div>
-      <div class="transaction-amount">
-        <strong>{{ transaction.amount|default:0|format_number }} {{ transaction.currency_code }}</strong>
-        <p class="muted">Ref: {{ transaction.reference_id|default:'-' }}</p>
       </div>
     </article>
     {% empty %}

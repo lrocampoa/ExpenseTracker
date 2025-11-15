@@ -3,6 +3,7 @@ from django.urls import reverse
 from django.utils.html import format_html
 
 from . import models
+from tracker.services import rules as rule_service
 
 
 @admin.register(models.SpendingGroup)
@@ -95,28 +96,55 @@ class LLMDecisionLogAdmin(admin.ModelAdmin):
 
     def promote_to_rule(self, request, queryset):
         created = 0
-        for log in queryset:
-            cat_id = (log.metadata or {}).get("category_id")
-            merchant = log.transaction.merchant_name if log.transaction else ""
-            if not cat_id or not merchant:
+        skipped = 0
+        logs = queryset.select_related("transaction")
+        for log in logs:
+            trx = log.transaction
+            metadata = log.metadata or {}
+            if not trx or not (trx.merchant_name or "").strip():
+                skipped += 1
                 continue
+
+            category = None
+            cat_id = metadata.get("category_id")
+            if cat_id:
+                category = models.Category.objects.filter(id=cat_id).first()
+            category = category or trx.category
+            if not category:
+                skipped += 1
+                continue
+
+            subcategory = trx.subcategory
+            subcat_id = metadata.get("subcategory_id")
+            if subcat_id:
+                subcategory = models.Subcategory.objects.filter(id=subcat_id).first() or subcategory
+
+            original_values = (trx.merchant_name, trx.category, trx.subcategory)
+            trx.category = category
+            trx.subcategory = subcategory
             try:
-                category = models.Category.objects.get(id=cat_id)
-            except models.Category.DoesNotExist:
-                continue
-            models.CategoryRule.objects.get_or_create(
-                name=f"LLM:{merchant}",
-                category=category,
-                defaults={
-                    "match_field": models.CategoryRule.MatchField.MERCHANT,
-                    "match_type": models.CategoryRule.MatchType.CONTAINS,
-                    "match_value": merchant[:255],
-                    "priority": 50,
-                    "confidence": 0.75,
-                },
-            )
-            created += 1
-        self.message_user(request, f"Se promovieron {created} reglas.")
+                result = rule_service.create_rule_from_transaction(
+                    trx,
+                    log.user or trx.user,
+                    include_card_last4=bool(trx.card_last4),
+                    origin=models.CategoryRule.Origin.PROMOTED,
+                )
+            except rule_service.RulePromotionError:
+                skipped += 1
+            else:
+                if result.created:
+                    created += 1
+            finally:
+                (
+                    trx.merchant_name,
+                    trx.category,
+                    trx.subcategory,
+                ) = original_values
+
+        msg = f"Se promovieron {created} reglas."
+        if skipped:
+            msg += f" ({skipped} sin categoría/comercio válido)"
+        self.message_user(request, msg)
 
     promote_to_rule.short_description = "Crear regla desde decisión LLM"
 

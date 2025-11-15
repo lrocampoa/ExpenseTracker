@@ -5,6 +5,11 @@
 2. Extend the period metadata/spend-control calculations so the total period length (e.g., full month or year) is known, enabling a correct “días restantes” count and a daily allowance that divides the remaining budget by the remaining days.
 3. Back up the change with a dashboard view test that exercises `range=this_month`; run the suite if possible to ensure regressions are caught early.
 
+## Active Work: Async manual import + progress UX (2024-12-xx)
+1. Replace the synchronous `/importar/` flow with an `ImportJob` queue so form submissions enqueue work and return immediately.
+2. Add a lightweight worker entry point (management command callable by a Render background service/cron) that pops pending jobs, runs `sync_mailboxes`/`parser_service`, and updates `fetched/processed/failed` counters for progress reporting. Wire a dedicated Render cron job to execute `python manage.py process_import_jobs` every ~5 min in production.
+3. Expose a JSON status endpoint plus UI polling so the import page can show a progress bar (“queued → syncing → processing → listo”) without hitting Gunicorn timeouts.
+
 ## 1. Goals & Constraints
 - **Primary goal:** Automatically ingest Bac Credomatic expense emails from Gmail, extract transaction details (amount, date, last 4 digits, merchant), categorize them, and store structured entries in a database.
 - **Tech stack constraint:** Python + Django, deployable on Render.
@@ -38,6 +43,14 @@
 4. Categorization engine assigns category + confidence; manual overrides stored in DB.
 5. Expose data through Django admin/API/web UI.
 
+## 0. Current Priorities
+1. **Fix LLM promotion in admin (Phase 3)** – create `CategoryRule`s with the new schema and metadata.
+2. **Rule management UX (Phase 3.5)** – add inline toggles, bulk priority editing, drag/drop ordering, and clearer provenance/analytics.
+3. **Subcategory-aware automation (Phase 3.6)** – flow `subcategory` through rule suggestions so automation respects sub-budgets.
+4. **Tarjetas + API layer (Phase 3.7 / 4)** – extend card screens with usage stats/defaults and publish DRF endpoints for cards/transactions/categories/import status.
+5. **User preferences & security (Phase 6)** – ship `UserPreference`, per-user sync controls, token encryption, and audit logs.
+6. **Next banks & dashboard modules** – Promerica/BCR ingestion plus the daily trend + location heat-map once the above are done.
+
 ## 4. Implementation Phases
 ### Phase 0: Foundations
 - Initialize Django project + git repo structure. ✅
@@ -51,15 +64,16 @@
 - Implement token storage/refresh (DB or encrypted file). ✅ (`GmailCredential` per user)
 - Build Gmail sync command: list messages filtered by sender/subject, fetch bodies, persist raw content and mark processed historyId checkpoint. ✅ (`GmailIngestionService` now prefers history-based incremental sync and records checkpoints via `MailSyncState`)
 - Add management command / worker job for periodic sync. ✅ (`sync_gmail`, `sync_mailboxes`, `run_pipeline`, `import_recent_transactions`)
-- **Next:** tie Gmail/Outlook sync plus parsing/categorization to per-user cron jobs on Render and expose scheduling knobs in the UI.
+- Render deployment + cron wiring ✅ (`entrypoint.sh` handles migrations/collectstatic; Render Cron runs `run_scheduled_pipelines`)
+- **Next:** expose per-user scheduling controls once preferences land.
 
 ### Phase 2: Parsing & Deduplication
 - Implement Bac Credomatic specific parser (HTML + regex) with unit tests using fixture emails. ✅ (multiple fixtures inc. USD)
-- Create confidence scoring + fallback logic; flag low-confidence items for manual review. ⚠️ `parse_confidence` exists on `Transaction` but the parser never assigns it, so there is no automated review queue yet.
+- Create confidence scoring + fallback logic; flag low-confidence items for manual review. ✅ (`review` service assigns `parse_confidence`/`needs_review`; dashboard + Review Queue live)
 - Ensure idempotency using Gmail message ID + hash of body. ✅ (update_or_create + dedupe on reparse)
 - Provide a one-shot management command (`python manage.py run_pipeline`) so Render cron/worker can sync Gmail → process emails → categorize transactions without manual steps. ✅
 - Add “Reprocesar” controls in the UI to allow manual re-parsing of any transaction email when templates change. ✅
-- **Next:** add transaction `parse_confidence` heuristics + a “needs review” list so low-confidence parses surface on the dashboard instead of relying solely on manual corrections.
+- **Next:** keep iterating on heuristics (per-bank tweaks) and wire threshold preferences when available.
 
 ### Phase 3: Categorization Engine
 - Build rules engine (keyword ↔ category mapping, card-based fallbacks). ✅ (`tracker/services/categorizer.RuleEngine` with priority + card filters)
@@ -150,12 +164,12 @@
 1. **User Preferences + Sensitive Data** (Phase 6.3 & 6.5) ⚠️
    - Implement a `UserPreference` model storing Gmail/Outlook query overrides, default currency, notification toggles, and LLM budgets per tenant.
    - Encrypt Gmail/Outlook token JSON + sync checkpoints (e.g., Fernet field) and record audit logs for imports, edits, and “reprocesar” actions.
-2. **Confidence Scoring & Review Queue** (Phase 2 pending) ⚠️
-   - Add `parse_confidence`/`needs_review` fields and surface a “Revisar pendientes” table so low-confidence parses are actioned without manual detective work.
+2. **Confidence Scoring & Review Queue** ✅
+   - Parser now records `parse_confidence`, transactions carry `needs_review`, and the dashboard + `/revisar/` queue surface pending items.
 3. **Deterministic Rule Feedback Loop** (Phase 3 enhancement) ✅
    - Completed via `TransactionCorrection` snapshots + `RuleSuggestion` queue; rules page already lets users accept/reject suggestions, but we can keep iterating on provenance UX.
 4. **API + Deployment** (Phase 4 & 5) ⚠️
-   - Build DRF endpoints (transactions, categories, cards, import runs) and create Docker/Render configs + cron schedule for `run_pipeline`/`import_recent_transactions`.
+   - Build DRF endpoints (transactions, categories, cards, import runs) and add monitoring/alerts; Docker/Render setup + cron are already live.
 5. **Hotmail Integration** ✅
    - Microsoft identity device + OAuth views/commands (`OutlookOAuthStart/Callback`, `python manage.py outlook_auth`) allow linking multiple Outlook/Hotmail inboxes per user.
    - Unified `sync_mailboxes` command runs Gmail history fetches and Microsoft Graph delta queries, persisting checkpoints per account in `MailSyncState`.
